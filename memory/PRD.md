@@ -82,13 +82,19 @@ The UI never claims fabricated certainty. Every score displays its confidence pe
 ## Prioritized backlog
 
 ### P1 (next session recommendations)
-- [ ] "Safest & Fastest" combined label when the same route wins both criteria
-- [ ] Escape key closes SOS/Share/Breakdown/Transit modals
-- [ ] Rate-limit `/api/incidents/{id}/confirm` per IP/session to prevent inflation
-- [ ] Photo upload for incident reports (optional, EXIF stripped)
-- [ ] Native share sheet (`navigator.share`) fallback for mobile in addition to WhatsApp
-- [x] ~~Show transit legs on the map~~ (walk-line to metro station → metro-line to dest station → walk-line) — **DONE 2026-07-06**
-- [x] ~~Per-line badges (Blue Line / Green Line / Interchange)~~ — **DONE 2026-07-06**
+- [x] ~~"Safest & Fastest" combined label~~ **DONE** — route label logic in `/api/routes` now combines both when the same route wins both criteria
+- [x] ~~Escape key closes SOS/Share/Breakdown/Transit modals~~ **DONE** — `useEscape` hook applied to all modals
+- [x] ~~Rate-limit `/api/incidents/{id}/confirm`~~ **DONE** — in-memory per-IP-per-incident rate limit (60s), returns 429
+- [x] ~~Photo upload for incident reports~~ **DONE** — `/api/incidents/{id}/photo` endpoint, Pillow re-encodes to strip EXIF/GPS, 2 MB cap, base64 data URL served with incident
+- [x] ~~Native share sheet~~ **DONE** — `navigator.share` button in Walk-With-Me modal (falls back to clipboard copy)
+- [x] ~~Show transit legs on the map~~ **DONE 2026-07-06**
+- [x] ~~Per-line badges (Blue Line / Green Line / Interchange)~~ **DONE 2026-07-06**
+
+### P2 (next session recommendations)
+- [x] ~~CMRL last-train warning~~ **DONE** — Metro card surfaces official operating hours 04:30–22:30 and warns 60/120 min before closure, with strong red banner after hours
+- [x] ~~MTC bus frequency note~~ **DONE** — italic honest note on Bus card ("10–20 min on busy routes; real-time ETA not published by MTC")
+- [x] ~~Ola/Uber deep-links~~ **DONE** — real book links (`m.uber.com/ul/` and `book.olacabs.com`) with pickup/drop coords on Auto & Cab cards
+- [x] ~~Women-only transit filter~~ **DONE** — checkbox in transit modal filters out non women-friendly modes (Auto hidden, Metro/Bus/Cab kept)
 
 ### P2 (future enhancements)
 - [ ] Split `server.py` into modules (`routes.py`, `journeys.py`, `incidents.py`, `safety_scoring.py`, `seed.py`)

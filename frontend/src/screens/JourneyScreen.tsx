@@ -6,6 +6,7 @@ import MapView from '../components/MapView';
 import ScoreBadge, { bandColor } from '../components/ScoreBadge';
 import { toast } from '../components/Toaster';
 import { getJourney, pingJourney, triggerSOS, completeJourney, fetchSafePlaces, type SafePlace } from '../lib/api';
+import { useEscape } from '../lib/useEscape';
 
 const SAFE_ICON: Record<string, string> = { police: '🛡️', women_police: '👮‍♀️', hospital: '🏥', pharmacy: '💊', metro: 'Ⓜ️', bus: '🚌', railway: '🚉', petrol: '⛽', govt: '🏛️', other: '📍' };
 const SAFE_COLOR: Record<string, string> = { police: '#0F766E', women_police: '#7C3AED', hospital: '#DC2626', pharmacy: '#EA580C', metro: '#2563EB', bus: '#0EA5E9', railway: '#6366F1', petrol: '#65A30D', govt: '#475569', other: '#64748B' };
@@ -24,6 +25,9 @@ export default function JourneyScreen() {
   const [deviation, setDeviation] = useState<number>(0);
   const [copied, setCopied] = useState(false);
   const watchIdRef = useRef<number | null>(null);
+
+  useEscape(showShare, () => setShowShare(false));
+  useEscape(showSOS, () => setShowSOS(false));
 
   const shareUrl = useMemo(() => `${window.location.origin}/watch/${token}`, [token]);
 
@@ -111,6 +115,25 @@ export default function JourneyScreen() {
     setCopied(true);
     toast('success', 'Link copied');
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const nativeShare = async () => {
+    const nav: any = navigator;
+    if (nav.share) {
+      try {
+        await nav.share({
+          title: 'SafeRoute — Walk With Me',
+          text: `I'm on my way to ${journey?.destination_label || 'my destination'}. Track me live via SafeRoute:`,
+          url: shareUrl,
+        });
+        toast('success', 'Shared');
+      } catch (e: any) {
+        if (e?.name !== 'AbortError') toast('error', 'Share cancelled');
+      }
+    } else {
+      copyLink();
+      toast('info', 'Native share unavailable — link copied instead');
+    }
   };
 
   const shareWhatsApp = () => {
@@ -247,6 +270,10 @@ export default function JourneyScreen() {
                   <MessageCircle className="w-4 h-4" /> WhatsApp
                 </button>
               </div>
+              <button onClick={nativeShare} data-testid="native-share-btn"
+                className="w-full mt-2 flex items-center justify-center gap-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl px-3 py-2.5 text-sm font-medium transition">
+                <Share2 className="w-4 h-4" /> Share via device (SMS · Signal · more)
+              </button>
               <p className="mt-3 text-[11px] text-slate-500 leading-relaxed">
                 Link auto-expires when you arrive or after 6 hours. All GPS data is deleted after journey ends.
               </p>

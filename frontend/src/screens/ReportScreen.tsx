@@ -1,10 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { X, LocateFixed, ShieldAlert, Info, Check } from 'lucide-react';
+import { X, LocateFixed, ShieldAlert, Info, Check, Camera, ImageIcon } from 'lucide-react';
 import MapView from '../components/MapView';
 import { toast } from '../components/Toaster';
-import { submitIncident, fetchIncidents, confirmIncident, type Incident } from '../lib/api';
+import { submitIncident, fetchIncidents, confirmIncident, uploadIncidentPhoto, type Incident } from '../lib/api';
 
 const CATEGORIES = [
   { id: 'harassment', label: 'Harassment', icon: '⚠️' },
@@ -28,6 +28,8 @@ export default function ReportScreen() {
   const [reporterLoc, setReporterLoc] = useState<{ lat: number; lng: number } | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [nearby, setNearby] = useState<Incident[]>([]);
+  const [photo, setPhoto] = useState<File | null>(null);
+  const [photoPreview, setPhotoPreview] = useState<string | null>(null);
 
   const getGPS = () => {
     if (!navigator.geolocation) { toast('error', 'GPS not available'); return; }
@@ -60,20 +62,38 @@ export default function ReportScreen() {
     if (!reporterLoc) { toast('warning', 'Enable GPS to verify proximity'); return; }
     setSubmitting(true);
     try {
-      await submitIncident({
+      const r = await submitIncident({
         category, description: description || undefined,
         lat: incidentLoc.lat, lng: incidentLoc.lng,
         reporter_lat: reporterLoc.lat, reporter_lng: reporterLoc.lng,
       });
-      toast('success', 'Report submitted — pending community verification');
-      setDescription('');
-      // Refresh nearby
-      const r = await fetchIncidents(reporterLoc.lat, reporterLoc.lng, 2000);
-      setNearby(r.incidents);
+      if (photo && r.id) {
+        try {
+          await uploadIncidentPhoto(r.id, photo);
+          toast('success', 'Report + photo submitted (EXIF stripped, pending verification)');
+        } catch {
+          toast('warning', 'Report submitted but photo upload failed');
+        }
+      } else {
+        toast('success', 'Report submitted — pending community verification');
+      }
+      setDescription(''); setPhoto(null); setPhotoPreview(null);
+      const rr = await fetchIncidents(reporterLoc.lat, reporterLoc.lng, 2000);
+      setNearby(rr.incidents);
     } catch (e: any) {
       toast('error', e?.response?.data?.detail || 'Submission failed');
     }
     setSubmitting(false);
+  };
+
+  const onPhotoPicked = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    if (f.size > 2 * 1024 * 1024) { toast('error', 'Photo must be under 2 MB'); return; }
+    setPhoto(f);
+    const reader = new FileReader();
+    reader.onload = (ev) => setPhotoPreview(ev.target?.result as string);
+    reader.readAsDataURL(f);
   };
 
   const confirm = async (id: string, disputed: boolean) => {
@@ -142,6 +162,25 @@ export default function ReportScreen() {
             className="w-full mt-2 bg-slate-50 border border-transparent focus:bg-white focus:border-teal-500 focus:ring-2 focus:ring-teal-200 rounded-xl px-3 py-2 text-sm outline-none resize-none"
             rows={3} maxLength={300} placeholder="Any details that could help others…" />
 
+          <label className="text-xs uppercase tracking-widest text-slate-500 font-semibold mt-4 block">Photo (optional)</label>
+          <div className="mt-2">
+            {photoPreview ? (
+              <div className="relative">
+                <img src={photoPreview} alt="preview" className="w-full h-40 object-cover rounded-xl border border-slate-200" data-testid="photo-preview" />
+                <button onClick={() => { setPhoto(null); setPhotoPreview(null); }} data-testid="remove-photo"
+                  className="absolute top-2 right-2 w-8 h-8 rounded-full bg-white/95 border border-slate-200 flex items-center justify-center">
+                  <X className="w-4 h-4 text-slate-600" />
+                </button>
+              </div>
+            ) : (
+              <label className="flex items-center justify-center gap-2 border-2 border-dashed border-slate-300 rounded-xl py-4 cursor-pointer hover:bg-slate-50 transition text-sm text-slate-600" data-testid="photo-picker">
+                <Camera className="w-4 h-4" /> Attach photo (EXIF stripped for privacy)
+                <input type="file" accept="image/jpeg,image/png,image/webp" onChange={onPhotoPicked} className="hidden" />
+              </label>
+            )}
+            <div className="text-[10px] text-slate-400 mt-1">Max 2 MB · Auto re-encoded to strip GPS/EXIF · Anonymous</div>
+          </div>
+
           <div className="mt-3 bg-slate-50 rounded-xl p-3 text-xs text-slate-700">
             <div className="flex items-center justify-between">
               <span>Incident location</span>
@@ -165,7 +204,10 @@ export default function ReportScreen() {
               <div className="mt-2 space-y-2">
                 {nearby.slice(0, 8).map(i => (
                   <div key={i.id} className="bg-white border border-slate-200 rounded-xl p-3" data-testid={`nearby-incident-${i.id}`}>
-                    <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-start gap-2">
+                      {i.photo_data_url && (
+                        <img src={i.photo_data_url} alt="incident" className="w-14 h-14 rounded-lg object-cover border border-slate-200" data-testid={`incident-photo-${i.id}`} />
+                      )}
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
                           <span className={`text-[10px] uppercase tracking-widest font-bold px-1.5 py-0.5 rounded ${

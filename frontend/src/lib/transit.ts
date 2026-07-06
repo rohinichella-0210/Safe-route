@@ -16,6 +16,11 @@ export interface TransitOption {
   safety: { score: number; band: string; factors: string[]; confidence: number };
   legs?: TransitLeg[];
   line_note?: string;
+  service_hours?: string;
+  service_warning?: string | null;
+  frequency_note?: string;
+  women_friendly?: boolean;
+  book_links?: { ola?: string; uber?: string };
   source_station?: { name: string; lat: number; lng: number; distance_m: number; lines?: string[] };
   destination_station?: { name: string; lat: number; lng: number; distance_m: number; lines?: string[] };
   source_stop?: { name: string; lat: number; lng: number; distance_m: number };

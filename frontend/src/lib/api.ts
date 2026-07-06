@@ -27,6 +27,7 @@ export interface Incident {
   id: string; category: string; description?: string; lat: number; lng: number;
   status: string; verified_count: number; disputed_count: number;
   source: string; source_url?: string; distance_m?: number; created_at?: string;
+  photo_data_url?: string | null;
 }
 
 export const searchPlaces = async (q: string): Promise<Place[]> => {
@@ -53,6 +54,13 @@ export const submitIncident = async (payload: {
   category: string; description?: string; lat: number; lng: number;
   reporter_lat?: number; reporter_lng?: number;
 }) => (await api.post('/incidents', payload)).data;
+
+export const uploadIncidentPhoto = async (id: string, file: File) => {
+  const form = new FormData();
+  form.append('photo', file);
+  const r = await api.post(`/incidents/${id}/photo`, form, { headers: { 'Content-Type': 'multipart/form-data' } });
+  return r.data;
+};
 
 export const confirmIncident = async (id: string, disputed = false) =>
   (await api.post(`/incidents/${id}/confirm`, null, { params: { disputed } })).data;

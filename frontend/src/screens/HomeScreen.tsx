@@ -7,6 +7,7 @@ import ScoreBadge, { bandColor, bandLabel } from '../components/ScoreBadge';
 import { toast } from '../components/Toaster';
 import { searchPlaces, computeRoutes, startJourney, fetchSafePlaces, type Place, type RouteResult, type SafePlace } from '../lib/api';
 import { fetchTransit, type TransitOption } from '../lib/transit';
+import { useEscape } from '../lib/useEscape';
 
 const CHENNAI: [number, number] = [13.0827, 80.2707];
 
@@ -98,6 +99,10 @@ export default function HomeScreen() {
   const [transit, setTransit] = useState<TransitOption[]>([]);
   const [transitLoading, setTransitLoading] = useState(false);
   const [selectedTransit, setSelectedTransit] = useState<TransitOption | null>(null);
+  const [womenOnly, setWomenOnly] = useState(false);
+
+  useEscape(showBreakdown, () => setShowBreakdown(false));
+  useEscape(transitOpen, () => setTransitOpen(false));
 
   // Locate on mount
   const handleUseLocation = (setter: (p: Place) => void) => {
@@ -434,13 +439,17 @@ export default function HomeScreen() {
                 <div>
                   <div className="font-poppins font-bold text-lg text-slate-900">Public transport options</div>
                   <div className="text-xs text-slate-500 mt-1">Real Chennai fares · CMRL slab, MTC slab, meter rates</div>
+                  <label className="mt-2 inline-flex items-center gap-2 text-xs text-slate-700 cursor-pointer select-none" data-testid="women-only-toggle">
+                    <input type="checkbox" checked={womenOnly} onChange={(e) => setWomenOnly(e.target.checked)} className="w-4 h-4 accent-teal-600" />
+                    <span>Women-friendly modes only <span className="text-slate-400">(CCTV / free-fare / GPS-tracked)</span></span>
+                  </label>
                 </div>
                 <button onClick={() => setTransitOpen(false)} className="p-1 hover:bg-slate-100 rounded-full" data-testid="close-transit">
                   <X className="w-5 h-5 text-slate-500" />
                 </button>
               </div>
               <div className="flex-1 overflow-y-auto panel-scroll p-5 space-y-3">
-                {transit.map((opt, i) => {
+                {transit.filter(o => !womenOnly || (o as any).women_friendly === true || o.mode === 'walk').map((opt, i) => {
                   const Icon = opt.mode === 'metro' ? TramFront : opt.mode === 'bus' ? Bus : opt.mode === 'walk' ? Footprints : Car;
                   const iconTint = opt.mode === 'metro' ? 'bg-blue-100 text-blue-700'
                     : opt.mode === 'bus' ? 'bg-sky-100 text-sky-700'
@@ -479,6 +488,14 @@ export default function HomeScreen() {
                                 </div>
                               )}
                               {opt.fare_note && <div className="text-[11px] text-slate-500 mt-1">{opt.fare_note}</div>}
+                              {opt.service_warning && (
+                                <div className={`mt-2 text-xs rounded-lg px-2 py-1.5 border ${opt.service_warning.startsWith('⛔') ? 'bg-red-50 border-red-200 text-red-800' : opt.service_warning.startsWith('⚠') ? 'bg-amber-50 border-amber-200 text-amber-800' : 'bg-sky-50 border-sky-200 text-sky-800'}`} data-testid={`service-warning-${opt.mode}`}>
+                                  {opt.service_warning}
+                                </div>
+                              )}
+                              {opt.frequency_note && (
+                                <div className="text-[11px] text-slate-500 mt-1 italic">{opt.frequency_note}</div>
+                              )}
                               {opt.legs && opt.legs.length > 0 && (
                                 <div className="mt-3 flex items-center gap-1 text-[11px] text-slate-600 flex-wrap">
                                   {opt.legs.map((l, li) => (
@@ -505,6 +522,22 @@ export default function HomeScreen() {
                                   className="mt-3 w-full flex items-center justify-center gap-1.5 bg-teal-600 hover:bg-teal-700 text-white rounded-xl px-3 py-2 text-sm font-medium transition">
                                   <MapPin className="w-4 h-4" /> Show on map
                                 </button>
+                              )}
+                              {opt.book_links && (opt.book_links.ola || opt.book_links.uber) && (
+                                <div className="mt-3 flex gap-2">
+                                  {opt.book_links.ola && (
+                                    <a href={opt.book_links.ola} target="_blank" rel="noreferrer" data-testid={`book-ola-${opt.mode}`}
+                                      className="flex-1 text-xs bg-lime-50 hover:bg-lime-100 text-lime-800 border border-lime-200 rounded-lg py-2 text-center font-semibold transition">
+                                      Book Ola →
+                                    </a>
+                                  )}
+                                  {opt.book_links.uber && (
+                                    <a href={opt.book_links.uber} target="_blank" rel="noreferrer" data-testid={`book-uber-${opt.mode}`}
+                                      className="flex-1 text-xs bg-slate-900 hover:bg-slate-800 text-white rounded-lg py-2 text-center font-semibold transition">
+                                      Book Uber →
+                                    </a>
+                                  )}
+                                </div>
                               )}
                               {opt.data_source && (
                                 <div className="text-[10px] text-slate-400 mt-2">Source: {opt.data_source}</div>

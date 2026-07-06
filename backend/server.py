@@ -16,7 +16,7 @@ from contextlib import asynccontextmanager
 import httpx
 from bson import ObjectId
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Query, Body
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Query, Body, Request, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, BeforeValidator, ConfigDict
@@ -37,6 +37,9 @@ OVERPASS_MIRRORS = [
     "https://overpass.kumi.systems/api/interpreter",
     "https://overpass.private.coffee/api/interpreter",
 ]
+
+# In-memory rate-limit dict (fine for single-worker preview; use Redis at scale)
+_CONFIRM_RATE_LIMIT: Dict[str, datetime] = {}
 
 CHENNAI_BBOX = (12.83, 80.10, 13.28, 80.35)  # south, west, north, east
 CHENNAI_CENTER = (13.0827, 80.2707)
@@ -719,14 +722,19 @@ async def compute_routes(req: RouteRequest):
 
     # Sort so highest safety first
     scored_routes.sort(key=lambda r: r["safety"]["score"], reverse=True)
-    # Add label
-    for i, r in enumerate(scored_routes):
-        if i == 0:
-            r["label"] = "Safest"
-        elif r["duration_s"] == min(x["duration_s"] for x in scored_routes):
-            r["label"] = "Fastest"
-        else:
-            r["label"] = "Alternative"
+    # Add label — combine when the safest is also the fastest
+    if scored_routes:
+        fastest_id = min(scored_routes, key=lambda r: r["duration_s"])["id"]
+        safest_id = scored_routes[0]["id"]
+        for i, r in enumerate(scored_routes):
+            if r["id"] == safest_id == fastest_id:
+                r["label"] = "Safest & Fastest"
+            elif r["id"] == safest_id:
+                r["label"] = "Safest"
+            elif r["id"] == fastest_id:
+                r["label"] = "Fastest"
+            else:
+                r["label"] = "Alternative"
 
     return {
         "routes": scored_routes,
@@ -791,6 +799,7 @@ async def list_incidents(
             "disputed_count": d.get("disputed_count", 0),
             "source": d.get("source", "community"),
             "source_url": d.get("source_url"),
+            "photo_data_url": d.get("photo_data_url"),
             "created_at": d.get("created_at"),
         }
         if lat is not None and lng is not None:
@@ -845,8 +854,68 @@ async def create_incident(payload: IncidentCreate):
     return {"id": str(res.inserted_id), "status": "pending"}
 
 
+@app.post("/api/incidents/{incident_id}/photo")
+async def upload_incident_photo(incident_id: str, photo: UploadFile = File(...)):
+    """Attach a photo to an incident (anonymous). EXIF is stripped by re-encoding via Pillow if available;
+    otherwise stored as base64 raw. Max 2 MB. JPEG/PNG only."""
+    try:
+        oid = ObjectId(incident_id)
+    except Exception:
+        raise HTTPException(400, "invalid id")
+
+    if photo.content_type not in ("image/jpeg", "image/png", "image/webp"):
+        raise HTTPException(400, "Only JPEG/PNG/WebP images are allowed.")
+    data = await photo.read()
+    if len(data) > 2 * 1024 * 1024:
+        raise HTTPException(413, "Photo must be under 2 MB.")
+
+    # Strip EXIF by re-encoding via Pillow if available
+    stripped_b64 = None
+    mime = photo.content_type
+    try:
+        from PIL import Image
+        import io as _io
+        img = Image.open(_io.BytesIO(data))
+        img = img.convert("RGB") if mime != "image/png" else img
+        # Resize down if huge
+        img.thumbnail((1600, 1600))
+        out = _io.BytesIO()
+        img.save(out, format="JPEG", quality=82, optimize=True)
+        stripped_b64 = "data:image/jpeg;base64," + __import__("base64").b64encode(out.getvalue()).decode()
+    except Exception as e:
+        logger.warning(f"Pillow re-encode failed, storing raw: {e}")
+        stripped_b64 = f"data:{mime};base64," + __import__("base64").b64encode(data).decode()
+
+    result = await db.incidents.update_one(
+        {"_id": oid},
+        {"$set": {"photo_data_url": stripped_b64, "photo_added_at": utc_now().isoformat()}},
+    )
+    if result.matched_count == 0:
+        raise HTTPException(404, "not found")
+    return {"ok": True, "size_bytes": len(data)}
+
+
 @app.post("/api/incidents/{incident_id}/confirm")
-async def confirm_incident(incident_id: str, disputed: bool = False):
+async def confirm_incident(incident_id: str, disputed: bool = False, request: Request = None):
+    # Rate-limit: per-IP per-incident, 1 vote per 60 seconds
+    ip = "unknown"
+    if request is not None:
+        ip = request.client.host if request.client else "unknown"
+        fwd = request.headers.get("x-forwarded-for")
+        if fwd:
+            ip = fwd.split(",")[0].strip()
+    key = f"{ip}:{incident_id}"
+    last = _CONFIRM_RATE_LIMIT.get(key)
+    now = utc_now()
+    if last and (now - last).total_seconds() < 60:
+        raise HTTPException(429, "Please wait before voting again on this report.")
+    _CONFIRM_RATE_LIMIT[key] = now
+    # GC entries older than 10 min
+    cutoff = now - timedelta(minutes=10)
+    for k in list(_CONFIRM_RATE_LIMIT.keys()):
+        if _CONFIRM_RATE_LIMIT[k] < cutoff:
+            _CONFIRM_RATE_LIMIT.pop(k, None)
+
     try:
         oid = ObjectId(incident_id)
     except Exception:
@@ -1256,6 +1325,13 @@ async def transit_options(req: RouteRequest):
     options = []
 
     # -------- Metro (CMRL) --------
+    # CMRL published operating hours: 04:30 – 22:30 (Mon-Sat), 07:00 – 22:30 (Sun)
+    # Source: https://chennaimetrorail.org/customer-service/timings/
+    cmrl_first_train = 4 * 60 + 30  # 04:30 → 270 min
+    cmrl_last_train = 22 * 60 + 30  # 22:30 → 1350 min
+    now_min = hour * 60 + utc_now().minute
+    minutes_to_last = cmrl_last_train - now_min
+
     src_metro = await nearest_of_category(req.source.lat, req.source.lng, "metro", radius_m=3000)
     dst_metro = await nearest_of_category(req.destination.lat, req.destination.lng, "metro", radius_m=3000)
     if src_metro and dst_metro and src_metro["name"] != dst_metro["name"]:
@@ -1288,6 +1364,15 @@ async def transit_options(req: RouteRequest):
         walk2_geo = await osrm_geometry("foot", dst_metro["lat"], dst_metro["lng"], req.destination.lat, req.destination.lng)
         metro_geo = [[src_metro["lng"], src_metro["lat"]], [dst_metro["lng"], dst_metro["lat"]]]  # straight line for now
 
+        # CMRL operating-hours warning
+        service_warning = None
+        if now_min >= cmrl_last_train or now_min < cmrl_first_train:
+            service_warning = "⛔ Metro service is currently closed. Last train 22:30, first train 04:30."
+        elif 0 < minutes_to_last <= 60:
+            service_warning = f"⚠ Last train in {minutes_to_last} min (CMRL closes 22:30). Consider a cab if you're cutting it close."
+        elif 60 < minutes_to_last <= 120:
+            service_warning = f"⏰ Last train in {minutes_to_last} min. Trip time is {total_min} min — you should make it."
+
         options.append({
             "mode": "metro",
             "label": "Metro (CMRL)",
@@ -1298,6 +1383,9 @@ async def transit_options(req: RouteRequest):
             "distance_km": round(metro_km + (walk1_m + walk2_m) / 1000, 1),
             "safety": safety,
             "line_note": line_note,
+            "service_hours": "04:30 – 22:30 (published CMRL timings)",
+            "service_warning": service_warning,
+            "women_friendly": True,  # CCTV + women's coach + gated stations
             "legs": [
                 {"type": "walk", "from": "Source", "to": src_metro["name"], "distance_m": walk1_m, "duration_min": round(walk1_m / 80),
                  "geometry": walk1_geo["geometry"] if walk1_geo else None},
@@ -1346,6 +1434,9 @@ async def transit_options(req: RouteRequest):
             "duration_min": total_min,
             "distance_km": round(bus_km, 1),
             "safety": safety,
+            "service_hours": "05:00 – 23:00 (typical MTC hours; night services on select routes)",
+            "frequency_note": "Ordinary buses arrive every 10-20 min on busy routes; longer on outer routes. Real-time bus ETA is not published by MTC.",
+            "women_friendly": True,  # front seats reserved + FREE for women in ordinary buses
             "legs": [
                 {"type": "walk", "from": "Source", "to": src_bus["name"], "distance_m": walk1_m, "duration_min": round(walk1_m / 80),
                  "geometry": walk1_geo["geometry"] if walk1_geo else None},
@@ -1368,6 +1459,8 @@ async def transit_options(req: RouteRequest):
 
     # -------- Auto --------
     fare_auto = auto_fare_inr(drive_km)
+    ola_auto = f"https://book.olacabs.com/?serviceType=p-share&utm_source=web_launch_referrer&pickup_lat={req.source.lat}&pickup_lng={req.source.lng}&drop_lat={req.destination.lat}&drop_lng={req.destination.lng}&category=auto"
+    uber_auto = f"https://m.uber.com/ul/?action=setPickup&pickup[latitude]={req.source.lat}&pickup[longitude]={req.source.lng}&dropoff[latitude]={req.destination.lat}&dropoff[longitude]={req.destination.lng}&product_id=uberauto"
     options.append({
         "mode": "auto",
         "label": "Auto",
@@ -1377,11 +1470,15 @@ async def transit_options(req: RouteRequest):
         "duration_min": round(drive_min + 3),
         "distance_km": round(drive_km, 1),
         "safety": transit_safety("auto", hour),
+        "book_links": {"ola": ola_auto, "uber": uber_auto},
+        "women_friendly": False,
         "data_source": "OSRM driving distance + Chennai auto meter rate (govt-published)",
     })
 
     # -------- Cab --------
     fare_cab = cab_fare_inr(drive_km)
+    ola_cab = f"https://book.olacabs.com/?serviceType=p2p&pickup_lat={req.source.lat}&pickup_lng={req.source.lng}&drop_lat={req.destination.lat}&drop_lng={req.destination.lng}&category=mini"
+    uber_cab = f"https://m.uber.com/ul/?action=setPickup&pickup[latitude]={req.source.lat}&pickup[longitude]={req.source.lng}&dropoff[latitude]={req.destination.lat}&dropoff[longitude]={req.destination.lng}"
     options.append({
         "mode": "cab",
         "label": "Cab (Ola/Uber)",
@@ -1391,6 +1488,8 @@ async def transit_options(req: RouteRequest):
         "duration_min": round(drive_min + 5),
         "distance_km": round(drive_km, 1),
         "safety": transit_safety("cab", hour),
+        "book_links": {"ola": ola_cab, "uber": uber_cab},
+        "women_friendly": True,  # tracked, OTP-verified, GPS-shared
         "data_source": "OSRM driving distance + typical Chennai aggregator rate",
     })
 
