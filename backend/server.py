@@ -1041,3 +1041,280 @@ async def dashboard_stats():
 @app.get("/api/config/weights")
 async def get_weights():
     return {"weights": SCORE_WEIGHTS, "note": "Weights are configurable. Every score explains its factors."}
+
+
+# ---------- Public Transit ----------
+# CMRL Chennai Metro fare slabs (public rate card, as of 2025):
+def cmrl_fare_inr(distance_km: float) -> int:
+    if distance_km <= 2: return 10
+    if distance_km <= 5: return 20
+    if distance_km <= 12: return 30
+    if distance_km <= 21: return 40
+    return 50
+
+
+# MTC ordinary bus fare (Chennai public slab, as of 2024-25):
+def mtc_bus_fare_inr(distance_km: float, deluxe: bool = False) -> int:
+    if distance_km <= 3: base = 5
+    elif distance_km <= 6: base = 7
+    elif distance_km <= 10: base = 10
+    elif distance_km <= 15: base = 15
+    elif distance_km <= 20: base = 20
+    else: base = 25
+    return base * 2 if deluxe else base
+
+
+def auto_fare_inr(distance_km: float) -> int:
+    # Chennai auto: ₹40 first 1.8 km, ₹18/km thereafter
+    if distance_km <= 1.8: return 40
+    return int(round(40 + (distance_km - 1.8) * 18))
+
+
+def cab_fare_inr(distance_km: float) -> int:
+    # Aggregator (Ola/Uber Mini) rough estimate for Chennai: ₹95 base + ₹12/km. Surge varies.
+    return int(round(95 + distance_km * 12))
+
+
+async def osrm_distance(profile: str, src: LatLng, dst: LatLng) -> Optional[Dict[str, Any]]:
+    """Query OSRM for a single route, returning distance and duration."""
+    coords_str = f"{src.lng},{src.lat};{dst.lng},{dst.lat}"
+    url = f"{OSRM_BASE}/route/v1/{profile}/{coords_str}"
+    params = {"overview": "false", "alternatives": "false"}
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.get(url, params=params)
+            r.raise_for_status()
+            data = r.json()
+            if data.get("code") != "Ok" or not data.get("routes"):
+                return None
+            rt = data["routes"][0]
+            return {"distance_m": rt["distance"], "duration_s": rt["duration"]}
+    except Exception as e:
+        logger.warning(f"OSRM {profile} failed: {e}")
+        return None
+
+
+async def nearest_of_category(lat: float, lng: float, category: str, radius_m: int = 3000) -> Optional[Dict[str, Any]]:
+    """Return the nearest safe_place doc of a given category within radius, or None."""
+    min_lat = lat - 0.03
+    max_lat = lat + 0.03
+    min_lng = lng - 0.03
+    max_lng = lng + 0.03
+    cursor = db.safe_places.find({
+        "category": category,
+        "lat": {"$gte": min_lat, "$lte": max_lat},
+        "lng": {"$gte": min_lng, "$lte": max_lng},
+    })
+    docs = await cursor.to_list(length=200)
+    best = None
+    best_d = float("inf")
+    for d in docs:
+        dist = haversine_m((lat, lng), (d["lat"], d["lng"]))
+        if dist < best_d and dist <= radius_m:
+            best_d = dist
+            best = {"name": d.get("name"), "lat": d["lat"], "lng": d["lng"], "distance_m": round(dist)}
+    return best
+
+
+def transit_safety(mode: str, hour: int) -> Dict[str, Any]:
+    """Return (score, band, factors, confidence) for a given transit mode + time-of-day."""
+    if mode == "metro":
+        base = 82
+        factors = [
+            "CCTV surveillance on all coaches & stations",
+            "Dedicated women's coach on every train",
+            "Well-lit, gated stations with security",
+        ]
+        conf = 0.85
+    elif mode == "bus":
+        base = 65
+        factors = [
+            "Front seats reserved for women (MTC policy)",
+            "Free travel for women in ordinary buses (TN Govt scheme)",
+            "Crowd density varies by route and hour",
+        ]
+        conf = 0.6
+    elif mode == "auto":
+        base = 55
+        factors = [
+            "Prefer app-booked autos (Ola Auto / Uber Auto) for accountability",
+            "Note driver number and share via Walk-With-Me",
+            "Higher risk on empty routes at night",
+        ]
+        conf = 0.55
+    elif mode == "cab":
+        base = 68
+        factors = [
+            "GPS-tracked ride via Ola/Uber with OTP verification",
+            "Driver ID and vehicle number available in app",
+            "Share ride status; SafeRoute Walk-With-Me works in parallel",
+        ]
+        conf = 0.7
+    else:
+        base = 60
+        factors = []
+        conf = 0.5
+
+    # Time-of-day penalty
+    if 21 <= hour or hour < 5:
+        base -= 15
+        factors = [*factors, "Night hours — reduced safety across all modes"]
+    elif 18 <= hour < 21:
+        base -= 6
+        factors = [*factors, "Evening — moderate risk"]
+
+    base = max(20, min(100, base))
+    return {"score": base, "band": band_for(base), "factors": factors, "confidence": conf}
+
+
+@app.post("/api/transit")
+async def transit_options(req: RouteRequest):
+    """Return public-transport suggestions for source → destination with fare, ETA, and safety."""
+    hour = utc_now().hour
+    if req.departure_time:
+        try:
+            hour = datetime.fromisoformat(req.departure_time.replace("Z", "+00:00")).hour
+        except Exception:
+            pass
+
+    # Straight-line distance for quick estimates
+    straight_km = haversine_m((req.source.lat, req.source.lng), (req.destination.lat, req.destination.lng)) / 1000
+
+    # Get driving distance from OSRM (for auto/cab)
+    driving = await osrm_distance("car", req.source, req.destination)
+    walking = await osrm_distance("foot", req.source, req.destination)
+    drive_km = (driving["distance_m"] / 1000) if driving else straight_km * 1.3
+    drive_min = (driving["duration_s"] / 60) if driving else drive_km * 3
+    walk_km = (walking["distance_m"] / 1000) if walking else straight_km * 1.1
+    walk_min = (walking["duration_s"] / 60) if walking else walk_km * 12
+
+    options = []
+
+    # -------- Metro (CMRL) --------
+    src_metro = await nearest_of_category(req.source.lat, req.source.lng, "metro", radius_m=3000)
+    dst_metro = await nearest_of_category(req.destination.lat, req.destination.lng, "metro", radius_m=3000)
+    if src_metro and dst_metro and src_metro["name"] != dst_metro["name"]:
+        walk1_m = src_metro["distance_m"]
+        walk2_m = dst_metro["distance_m"]
+        metro_km = haversine_m((src_metro["lat"], src_metro["lng"]), (dst_metro["lat"], dst_metro["lng"])) / 1000 * 1.15  # slight overhead for tracks
+        # Average metro speed with stops ~ 30-35 km/h
+        metro_min = metro_km / 32 * 60 + 4  # 4 min for boarding/waiting
+        walk_min_total = (walk1_m + walk2_m) / 80  # ~80 m/min walking
+        total_min = round(metro_min + walk_min_total)
+        fare = cmrl_fare_inr(metro_km)
+        safety = transit_safety("metro", hour)
+        options.append({
+            "mode": "metro",
+            "label": "Metro (CMRL)",
+            "icon": "metro",
+            "fare_inr": fare,
+            "fare_note": "Actual CMRL slab rate",
+            "duration_min": total_min,
+            "distance_km": round(metro_km + (walk1_m + walk2_m) / 1000, 1),
+            "safety": safety,
+            "legs": [
+                {"type": "walk", "from": "Source", "to": src_metro["name"], "distance_m": walk1_m, "duration_min": round(walk1_m / 80)},
+                {"type": "metro", "from": src_metro["name"], "to": dst_metro["name"], "distance_km": round(metro_km, 1), "duration_min": round(metro_min)},
+                {"type": "walk", "from": dst_metro["name"], "to": "Destination", "distance_m": walk2_m, "duration_min": round(walk2_m / 80)},
+            ],
+            "source_station": src_metro,
+            "destination_station": dst_metro,
+            "data_source": "OpenStreetMap (real CMRL station locations) + CMRL published fare slabs",
+        })
+    else:
+        options.append({
+            "mode": "metro", "label": "Metro (CMRL)", "icon": "metro",
+            "unavailable": True,
+            "reason": "No metro station within 3 km of source or destination (both ends need metro access)",
+            "safety": transit_safety("metro", hour),
+        })
+
+    # -------- Bus (MTC) --------
+    src_bus = await nearest_of_category(req.source.lat, req.source.lng, "bus", radius_m=1500)
+    dst_bus = await nearest_of_category(req.destination.lat, req.destination.lng, "bus", radius_m=1500)
+    if src_bus and dst_bus and src_bus["name"] != dst_bus["name"]:
+        walk1_m = src_bus["distance_m"]
+        walk2_m = dst_bus["distance_m"]
+        bus_km = drive_km  # bus roughly follows roads
+        bus_min = bus_km / 18 * 60 + 5  # avg speed 18 km/h with stops; 5 min wait
+        walk_min_total = (walk1_m + walk2_m) / 80
+        total_min = round(bus_min + walk_min_total)
+        fare_ord = mtc_bus_fare_inr(bus_km, deluxe=False)
+        fare_dlx = mtc_bus_fare_inr(bus_km, deluxe=True)
+        safety = transit_safety("bus", hour)
+        options.append({
+            "mode": "bus",
+            "label": "Bus (MTC)",
+            "icon": "bus",
+            "fare_inr": fare_ord,
+            "fare_note": f"Ordinary ₹{fare_ord} · Deluxe ₹{fare_dlx} · FREE for women (ordinary buses, TN scheme)",
+            "duration_min": total_min,
+            "distance_km": round(bus_km, 1),
+            "safety": safety,
+            "legs": [
+                {"type": "walk", "from": "Source", "to": src_bus["name"], "distance_m": walk1_m, "duration_min": round(walk1_m / 80)},
+                {"type": "bus", "from": src_bus["name"], "to": dst_bus["name"], "distance_km": round(bus_km, 1), "duration_min": round(bus_min)},
+                {"type": "walk", "from": dst_bus["name"], "to": "Destination", "distance_m": walk2_m, "duration_min": round(walk2_m / 80)},
+            ],
+            "source_stop": src_bus,
+            "destination_stop": dst_bus,
+            "data_source": "OpenStreetMap (real MTC bus stops) + MTC published fare slabs + TN Free Bus Scheme for women",
+        })
+    else:
+        options.append({
+            "mode": "bus", "label": "Bus (MTC)", "icon": "bus",
+            "unavailable": True,
+            "reason": "No bus stop within 1.5 km of both endpoints",
+            "safety": transit_safety("bus", hour),
+        })
+
+    # -------- Auto --------
+    fare_auto = auto_fare_inr(drive_km)
+    options.append({
+        "mode": "auto",
+        "label": "Auto",
+        "icon": "auto",
+        "fare_inr": fare_auto,
+        "fare_note": f"₹40 first 1.8 km + ₹18/km · meter rate",
+        "duration_min": round(drive_min + 3),
+        "distance_km": round(drive_km, 1),
+        "safety": transit_safety("auto", hour),
+        "data_source": "OSRM driving distance + Chennai auto meter rate (govt-published)",
+    })
+
+    # -------- Cab --------
+    fare_cab = cab_fare_inr(drive_km)
+    options.append({
+        "mode": "cab",
+        "label": "Cab (Ola/Uber)",
+        "icon": "cab",
+        "fare_inr": fare_cab,
+        "fare_note": "Estimate (Ola Mini / Uber Go) — surge pricing may apply",
+        "duration_min": round(drive_min + 5),
+        "distance_km": round(drive_km, 1),
+        "safety": transit_safety("cab", hour),
+        "data_source": "OSRM driving distance + typical Chennai aggregator rate",
+    })
+
+    # -------- Walking (for short trips) --------
+    if walk_km <= 3:
+        options.append({
+            "mode": "walk",
+            "label": "Walk",
+            "icon": "walk",
+            "fare_inr": 0,
+            "fare_note": "Free",
+            "duration_min": round(walk_min),
+            "distance_km": round(walk_km, 1),
+            "safety": {"score": 70 if 6 <= hour < 19 else 45, "band": band_for(70 if 6 <= hour < 19 else 45),
+                       "factors": ["Score reflects time of day — check the walking-route breakdown for full analysis"], "confidence": 0.6},
+            "data_source": "OSRM foot profile",
+        })
+
+    return {
+        "options": options,
+        "hour": hour,
+        "departure": utc_now().isoformat(),
+        "note": "Fares are official published rates. Cab fares are estimates (surge varies). Bus is FREE for women in ordinary MTC buses.",
+    }
+

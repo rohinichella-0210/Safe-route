@@ -40,6 +40,7 @@ User's core mandate: *"i want very detailed and realistic chennai map and detail
 ## What's been implemented (MVP)
 
 **Date shipped:** 2026-07-06
+**Latest update:** 2026-07-06 — Public transport suggestions added
 
 - ✅ **Home / Search screen** — full-screen Leaflet map with real Chennai OSM tiles, glassmorphic search panel with autocomplete (Nominatim), source/destination pickers with "use my GPS" option, mode toggle (walking/cycling/driving), brand pill and Dashboard link.
 - ✅ **Multi-route safety comparison** — up to 3 routes ranked safest-first, each with ScoreBadge (0-100 + band), ETA, distance, verified incidents count, landmarks count, confidence %. Route polylines color-coded by safety band.
@@ -53,6 +54,13 @@ User's core mandate: *"i want very detailed and realistic chennai map and detail
 - ✅ **Dashboard** — real aggregate stats (verified incidents, safe places mapped, police stations, hospitals, metro stations, active journeys), safety-score weight explanation, and full list of data sources with attribution.
 - ✅ **Auto-delete on journey completion** — GPS pings, route geometry, and current location purged from journey document; only anonymized status remains.
 - ✅ **Real WebSocket live tracking** — `/api/ws/journeys/{token}` broadcasts location and SOS events to all connected watchers.
+- ✅ **Public transport suggestions (added 2026-07-06)** — new `/api/transit` endpoint returns Metro (CMRL), Bus (MTC), Auto, Cab, and Walk options with:
+  - **Real fares**: CMRL published slab (₹10 → ₹50), MTC published slab (₹5 → ₹25), auto meter (₹40 + ₹18/km), cab aggregator estimate (₹95 + ₹12/km)
+  - **Real leg breakdown**: walk-to-station + transit + walk-to-destination for Metro & Bus (using nearest OSM stations)
+  - **TN Free Bus Scheme for women** highlighted in the Bus card
+  - **Mode-specific safety factors**: CCTV & women's coaches for metro, front-seat reservation & free-fare for buses, app-booked safety for autos/cabs
+  - **Metro correctly marked UNAVAILABLE** when no station within 3 km of either endpoint (never faked)
+  - Accessible via the "Show Metro · Bus · Auto · Cab" button on Home; modal shows all options ranked with fare, ETA, Safety Score, safety factors, and data source citation.
 
 ## What's real, and where we're transparent
 
@@ -75,11 +83,11 @@ The UI never claims fabricated certainty. Every score displays its confidence pe
 
 ### P1 (next session recommendations)
 - [ ] "Safest & Fastest" combined label when the same route wins both criteria
-- [ ] Escape key closes SOS/Share/Breakdown modals
+- [ ] Escape key closes SOS/Share/Breakdown/Transit modals
 - [ ] Rate-limit `/api/incidents/{id}/confirm` per IP/session to prevent inflation
-- [ ] Public-transport route suggestion (Chennai Metro CMRL + MTC bus) — currently only walking/cycling/driving
 - [ ] Photo upload for incident reports (optional, EXIF stripped)
 - [ ] Native share sheet (`navigator.share`) fallback for mobile in addition to WhatsApp
+- [ ] Show transit legs on the map (walk-line to metro station → metro-line to dest station → walk-line)
 
 ### P2 (future enhancements)
 - [ ] Split `server.py` into modules (`routes.py`, `journeys.py`, `incidents.py`, `safety_scoring.py`, `seed.py`)

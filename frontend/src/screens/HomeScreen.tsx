@@ -1,11 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Search, MapPin, Navigation2, ShieldAlert, Info, X, ChevronDown, Loader2, LocateFixed, Users, Building2, ArrowRight, LayoutDashboard } from 'lucide-react';
+import { Search, MapPin, Navigation2, ShieldAlert, Info, X, ChevronDown, Loader2, LocateFixed, Users, Building2, ArrowRight, LayoutDashboard, Bus, TramFront, Car, Footprints, IndianRupee, Clock } from 'lucide-react';
 import MapView from '../components/MapView';
 import ScoreBadge, { bandColor, bandLabel } from '../components/ScoreBadge';
 import { toast } from '../components/Toaster';
 import { searchPlaces, computeRoutes, startJourney, fetchSafePlaces, type Place, type RouteResult, type SafePlace } from '../lib/api';
+import { fetchTransit, type TransitOption } from '../lib/transit';
 
 const CHENNAI: [number, number] = [13.0827, 80.2707];
 
@@ -93,6 +94,9 @@ export default function HomeScreen() {
   const [safePlaces, setSafePlaces] = useState<SafePlace[]>([]);
   const [userLoc, setUserLoc] = useState<{ lat: number; lng: number } | null>(null);
   const [panelOpen, setPanelOpen] = useState(true);
+  const [transitOpen, setTransitOpen] = useState(false);
+  const [transit, setTransit] = useState<TransitOption[]>([]);
+  const [transitLoading, setTransitLoading] = useState(false);
 
   // Locate on mount
   const handleUseLocation = (setter: (p: Place) => void) => {
@@ -122,6 +126,19 @@ export default function HomeScreen() {
       toast('error', e?.response?.data?.detail || 'Failed to compute routes');
     }
     setLoading(false);
+  };
+
+  const loadTransit = async () => {
+    if (!source || !destination) { toast('warning', 'Pick source and destination first'); return; }
+    setTransitLoading(true);
+    try {
+      const r = await fetchTransit({ lat: source.lat, lng: source.lng }, { lat: destination.lat, lng: destination.lng });
+      setTransit(r.options);
+      setTransitOpen(true);
+    } catch (e: any) {
+      toast('error', 'Transit lookup failed');
+    }
+    setTransitLoading(false);
   };
 
   const routeMarkers = useMemo(() => {
@@ -222,6 +239,11 @@ export default function HomeScreen() {
               Analyze
             </button>
           </div>
+          <button data-testid="transit-btn" onClick={loadTransit} disabled={transitLoading || !source || !destination}
+            className="w-full mt-2 bg-slate-50 hover:bg-slate-100 disabled:bg-slate-50 disabled:text-slate-400 border border-slate-200 text-slate-700 rounded-xl px-3 py-2 text-sm font-medium flex items-center justify-center gap-2 transition">
+            {transitLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Bus className="w-4 h-4" />}
+            Show Metro · Bus · Auto · Cab
+          </button>
         </div>
 
         <div className="flex-1 overflow-y-auto panel-scroll p-4 md:p-5 space-y-3" data-testid="routes-panel">
@@ -352,6 +374,94 @@ export default function HomeScreen() {
                   <b>How this works:</b> SafeRoute never fabricates data. Where confidence is low (e.g. lighting),
                   we say so explicitly. All safety scores use real Chennai POI data (OpenStreetMap) and community
                   reports validated by GPS proximity. You always choose your own route.
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Transit modal */}
+      <AnimatePresence>
+        {transitOpen && (
+          <motion.div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-end md:items-center justify-center"
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            onClick={() => setTransitOpen(false)}>
+            <motion.div onClick={(e) => e.stopPropagation()}
+              initial={{ y: 40, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 40, opacity: 0 }}
+              className="bg-white w-full md:max-w-lg rounded-t-3xl md:rounded-3xl shadow-2xl max-h-[85vh] overflow-hidden flex flex-col"
+              data-testid="transit-modal">
+              <div className="p-5 border-b border-slate-100 flex items-start justify-between gap-3">
+                <div>
+                  <div className="font-poppins font-bold text-lg text-slate-900">Public transport options</div>
+                  <div className="text-xs text-slate-500 mt-1">Real Chennai fares · CMRL slab, MTC slab, meter rates</div>
+                </div>
+                <button onClick={() => setTransitOpen(false)} className="p-1 hover:bg-slate-100 rounded-full" data-testid="close-transit">
+                  <X className="w-5 h-5 text-slate-500" />
+                </button>
+              </div>
+              <div className="flex-1 overflow-y-auto panel-scroll p-5 space-y-3">
+                {transit.map((opt, i) => {
+                  const Icon = opt.mode === 'metro' ? TramFront : opt.mode === 'bus' ? Bus : opt.mode === 'walk' ? Footprints : Car;
+                  const iconTint = opt.mode === 'metro' ? 'bg-blue-100 text-blue-700'
+                    : opt.mode === 'bus' ? 'bg-sky-100 text-sky-700'
+                    : opt.mode === 'auto' ? 'bg-yellow-100 text-yellow-700'
+                    : opt.mode === 'cab' ? 'bg-slate-100 text-slate-700'
+                    : 'bg-teal-100 text-teal-700';
+                  return (
+                    <div key={i} className={`rounded-2xl border p-4 ${opt.unavailable ? 'bg-slate-50 border-slate-200 opacity-70' : 'bg-white border-slate-200 shadow-sm'}`}
+                      data-testid={`transit-option-${opt.mode}`}>
+                      <div className="flex items-start gap-3">
+                        <div className={`w-11 h-11 rounded-xl flex items-center justify-center shrink-0 ${iconTint}`}>
+                          <Icon className="w-5 h-5" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-baseline justify-between gap-2">
+                            <div className="font-poppins font-bold text-slate-900">{opt.label}</div>
+                            <ScoreBadge score={opt.safety.score} size="sm" />
+                          </div>
+                          {opt.unavailable ? (
+                            <div className="text-sm text-slate-500 mt-1">{opt.reason}</div>
+                          ) : (
+                            <>
+                              <div className="flex items-center gap-3 text-sm text-slate-700 mt-1">
+                                <span className="flex items-center gap-1 font-medium"><IndianRupee className="w-3.5 h-3.5" />{opt.fare_inr}</span>
+                                <span className="flex items-center gap-1 text-slate-500"><Clock className="w-3.5 h-3.5" />{opt.duration_min} min</span>
+                                <span className="text-slate-500">{opt.distance_km} km</span>
+                              </div>
+                              {opt.fare_note && <div className="text-[11px] text-slate-500 mt-1">{opt.fare_note}</div>}
+                              {opt.legs && opt.legs.length > 0 && (
+                                <div className="mt-3 flex items-center gap-1 text-[11px] text-slate-600 flex-wrap">
+                                  {opt.legs.map((l, li) => (
+                                    <React.Fragment key={li}>
+                                      <span className={`px-1.5 py-0.5 rounded ${l.type === 'walk' ? 'bg-slate-100 text-slate-700' : l.type === 'metro' ? 'bg-blue-100 text-blue-700' : 'bg-sky-100 text-sky-700'}`}>
+                                        {l.type === 'walk' ? '🚶' : l.type === 'metro' ? 'Ⓜ️' : '🚌'} {l.type === 'walk' ? `${l.distance_m}m` : `${l.distance_km}km`} · {l.duration_min}min
+                                      </span>
+                                      {li < opt.legs!.length - 1 && <ArrowRight className="w-3 h-3 text-slate-400" />}
+                                    </React.Fragment>
+                                  ))}
+                                </div>
+                              )}
+                              {opt.safety.factors.length > 0 && (
+                                <div className="mt-3 text-xs text-slate-600 bg-slate-50 rounded-lg p-2 border border-slate-100">
+                                  <div className="font-semibold text-slate-700 mb-1">Safety factors ({Math.round(opt.safety.confidence * 100)}% conf.)</div>
+                                  <ul className="space-y-0.5 list-disc list-inside">
+                                    {opt.safety.factors.map((f, fi) => <li key={fi}>{f}</li>)}
+                                  </ul>
+                                </div>
+                              )}
+                              {opt.data_source && (
+                                <div className="text-[10px] text-slate-400 mt-2">Source: {opt.data_source}</div>
+                              )}
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+                <div className="text-[11px] text-slate-500 bg-slate-50 rounded-xl p-3 border border-slate-200">
+                  <b>Note:</b> Fares are official published rates. Cab estimates exclude surge. Bus is <b>FREE for women</b> in MTC ordinary buses under the Tamil Nadu Government scheme.
                 </div>
               </div>
             </motion.div>
