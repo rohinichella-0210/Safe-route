@@ -1,0 +1,142 @@
+{
+  "theme": "light",
+  "archetype": "1 (Organic & Earthy / Calm Pastel)",
+  "emotional_tone": "Calm, premium, trustworthy, transparent, and secure.",
+  "typography": {
+    "headings": {
+      "family": "font-poppins",
+      "weights": ["font-semibold", "font-bold"],
+      "tracking": "tracking-tight",
+      "color": "text-slate-900"
+    },
+    "body": {
+      "family": "font-inter",
+      "weights": ["font-normal", "font-medium"],
+      "tracking": "tracking-normal",
+      "color": "text-slate-700"
+    },
+    "scale": {
+      "h1": "text-4xl md:text-5xl",
+      "h2": "text-2xl md:text-3xl",
+      "h3": "text-xl md:text-2xl",
+      "h4": "text-lg md:text-xl",
+      "body": "text-base",
+      "small": "text-sm",
+      "overline": "text-xs uppercase tracking-[0.2em] text-slate-500"
+    }
+  },
+  "colors": {
+    "backgrounds": {
+      "app": "bg-slate-50",
+      "panel_solid": "bg-white",
+      "panel_glass": "bg-white/85 backdrop-blur-xl"
+    },
+    "brand_safety": {
+      "primary": "bg-teal-600",
+      "primary_hover": "hover:bg-teal-700",
+      "light_bg": "bg-teal-50",
+      "text": "text-teal-700",
+      "border": "border-teal-200",
+      "polyline": "#0D9488"
+    },
+    "status": {
+      "safe": {
+        "bg": "bg-teal-100",
+        "text": "text-teal-800",
+        "icon": "text-teal-600"
+      },
+      "caution": {
+        "bg": "bg-amber-100",
+        "text": "text-amber-800",
+        "icon": "text-amber-600",
+        "polyline": "#D97706"
+      },
+      "risky": {
+        "bg": "bg-slate-200",
+        "text": "text-slate-700",
+        "icon": "text-slate-500",
+        "polyline": "#64748B"
+      },
+      "emergency": {
+        "bg": "bg-red-600",
+        "hover": "hover:bg-red-700",
+        "text": "text-white",
+        "pulse": "animate-pulse border-4 border-red-300"
+      }
+    },
+    "text": {
+      "primary": "text-slate-900",
+      "secondary": "text-slate-600",
+      "muted": "text-slate-400"
+    },
+    "borders": {
+      "default": "border-slate-200",
+      "glass": "border-white/40"
+    }
+  },
+  "layout_and_spacing": {
+    "container_padding": "p-4 md:p-6",
+    "card_padding": "p-4 md:p-6",
+    "gap": "gap-4 md:gap-6",
+    "radius": "rounded-2xl",
+    "map_structure": {
+      "map_layer": "fixed inset-0 w-full h-full z-0",
+      "search_overlay": "absolute top-4 left-4 right-4 md:left-8 md:w-[400px] z-40",
+      "panel_overlay": "absolute bottom-0 left-0 right-0 max-h-[85vh] rounded-t-3xl md:top-24 md:bottom-8 md:left-8 md:right-auto md:w-[400px] md:rounded-2xl z-40 overflow-y-auto",
+      "fab_container": "absolute bottom-6 right-6 md:bottom-8 md:right-8 z-50 flex flex-col gap-4"
+    }
+  },
+  "surfaces_and_micro_themes": {
+    "glassmorphism": {
+      "classes": "bg-white/85 backdrop-blur-xl border border-white/60 shadow-[0_8px_32px_rgba(0,0,0,0.08)]",
+      "usage": "Use for the search bar, floating route cards over the map, and the bottom sheet/side panel to maintain context of the map underneath."
+    },
+    "solid_cards": {
+      "classes": "bg-white border border-slate-200 shadow-sm",
+      "usage": "Use for nested content inside the side panel (e.g., Safety Score breakdown, Safe Spot list)."
+    }
+  },
+  "components_strategy": {
+    "buttons": {
+      "primary": "bg-teal-600 text-white hover:bg-teal-700 rounded-xl px-4 py-2 font-medium transition-colors duration-200",
+      "secondary": "bg-white text-slate-700 border border-slate-200 hover:bg-slate-50 rounded-xl px-4 py-2 font-medium transition-colors duration-200",
+      "sos": "bg-red-600 text-white hover:bg-red-700 rounded-full w-16 h-16 flex items-center justify-center shadow-lg hover:shadow-xl transition-all duration-200"
+    },
+    "inputs": "bg-slate-50 border-transparent focus:bg-white focus:border-teal-500 focus:ring-2 focus:ring-teal-200 rounded-xl",
+    "badges": "px-2.5 py-0.5 rounded-full text-xs font-semibold uppercase tracking-wide",
+    "shadcn_overrides": {
+      "sheet": "Use rounded top corners for mobile, and floating panel for desktop. Remove default Vercel-like sharp edges.",
+      "progress": "Use custom colors (Teal for progress, Slate for background)."
+    }
+  },
+  "motion": {
+    "transitions": "transition-all duration-300 ease-in-out",
+    "hover_card": "hover:-translate-y-1 hover:shadow-md",
+    "pulse_sos": "animate-[pulse_2s_cubic-bezier(0.4,0,0.6,1)_infinite]",
+    "accessibility": "respect prefers-reduced-motion"
+  },
+  "icons": {
+    "library": "lucide-react",
+    "style": "Use stroke-width 2, rounded edges. Size 20px (w-5 h-5) for general UI, 24px (w-6 h-6) for important actions."
+  },
+  "accessibility": {
+    "contrast": "Ensure all text meets WCAG 2.1 AA. Teal-600 on white passes. Amber-600 for icons/lines.",
+    "test_ids": "Every interactive element MUST have a `data-testid` (e.g., `data-testid=\"search-input\"`, `data-testid=\"sos-button\"`).",
+    "focus_rings": "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500 focus-visible:ring-offset-2"
+  },
+  "image_urls": {
+    "map_markers": {
+      "description": "Use Lucide icons wrapped in HTML markers for map pins instead of generic images.",
+      "category": "Map"
+    }
+  },
+  "instructions_to_main_agent": [
+    "Install `lucide-react`, `react-leaflet`, `leaflet`.",
+    "Use Poppins for headings and Inter for body text.",
+    "Do NOT use red for anything other than SOS and Emergency alerts. Use Teal for safe paths and Amber for caution/moderate paths. Avoid standard Google Maps blue for routes.",
+    "Implement a full-screen Leaflet map using react-leaflet. The UI should float on top of it.",
+    "Use Glassmorphism (bg-white/85 + backdrop-blur-xl) for floating panels.",
+    "Add 'Walk With Me' feature UI (share link modal) and an Emergency SOS floating button.",
+    "Include a dashboard view for aggregate stats."
+  ]
+}
