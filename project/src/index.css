@@ -1,0 +1,162 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Poppins:wght@500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply font-sans antialiased bg-surface-50 text-surface-800;
+    overflow-x: hidden;
+  }
+
+  :root {
+    --color-primary: #3b82f6;
+    --color-safety-excellent: #10b981;
+    --color-safety-good: #22c55e;
+    --color-safety-moderate: #f59e0b;
+    --color-safety-low: #f97316;
+    --color-danger: #ef4444;
+  }
+}
+
+@layer components {
+  .glass {
+    @apply bg-white/80 backdrop-blur-xl border border-white/20 shadow-glass;
+  }
+
+  .glass-card {
+    @apply bg-white/90 backdrop-blur-xl border border-white/30 shadow-glass rounded-2xl;
+  }
+
+  .glass-button {
+    @apply bg-white/80 backdrop-blur-lg border border-white/30 shadow-md rounded-xl;
+  }
+
+  .safety-excellent {
+    @apply bg-emerald-500/10 text-emerald-600 border-emerald-500;
+  }
+
+  .safety-good {
+    @apply bg-green-500/10 text-green-600 border-green-500;
+  }
+
+  .safety-moderate {
+    @apply bg-amber-500/10 text-amber-600 border-amber-500;
+  }
+
+  .safety-low {
+    @apply bg-orange-500/10 text-orange-600 border-orange-500;
+  }
+
+  .safety-danger {
+    @apply bg-red-500/10 text-red-600 border-red-500;
+  }
+
+  .btn-primary {
+    @apply px-6 py-3 bg-blue-600 text-white font-medium rounded-xl
+           hover:bg-blue-700 active:bg-blue-800
+           transition-all duration-200 shadow-md hover:shadow-lg
+           focus:outline-none focus:ring-2 focus:ring-blue-500/50;
+  }
+
+  .btn-secondary {
+    @apply px-6 py-3 bg-white text-zinc-700 font-medium rounded-xl
+           border border-zinc-200 hover:bg-zinc-50
+           transition-all duration-200 shadow-sm hover:shadow-md
+           focus:outline-none focus:ring-2 focus:ring-zinc-400/30;
+  }
+
+  .btn-danger {
+    @apply px-6 py-3 bg-red-500 text-white font-medium rounded-xl
+           hover:bg-red-600 active:bg-red-700
+           transition-all duration-200 shadow-md hover:shadow-lg
+           focus:outline-none focus:ring-2 focus:ring-red-500/50;
+  }
+
+  .input-field {
+    @apply w-full px-4 py-3 bg-white/80 backdrop-blur-md border border-zinc-200
+           rounded-xl text-zinc-800 placeholder-zinc-400
+           focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-400
+           transition-all duration-200;
+  }
+
+  .card {
+    @apply bg-white rounded-2xl shadow-card hover:shadow-card-hover
+           transition-all duration-300 overflow-hidden;
+  }
+
+  .stat-card {
+    @apply glass-card p-6 flex flex-col items-center justify-center text-center
+           hover:scale-105 transition-transform duration-300;
+  }
+
+  .route-card {
+    @apply glass-card p-4 cursor-pointer hover:shadow-glass-lg
+           transition-all duration-300 hover:scale-[1.02];
+  }
+
+  .nav-pill {
+    @apply px-4 py-2 rounded-full text-sm font-medium transition-all duration-200
+           hover:bg-zinc-100 active:scale-95;
+  }
+
+  .nav-pill-active {
+    @apply bg-blue-100 text-blue-700;
+  }
+}
+
+@layer utilities {
+  .text-gradient {
+    @apply bg-clip-text text-transparent bg-gradient-to-r from-blue-600 to-blue-400;
+  }
+
+  .animate-gradient {
+    background-size: 200% 200%;
+    animation: gradient 8s ease infinite;
+  }
+
+  @keyframes gradient {
+    0%, 100% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+  }
+
+  .skeleton {
+    @apply bg-zinc-200 animate-pulse rounded;
+  }
+
+  .map-container {
+    @apply w-full h-full fixed top-0 left-0 z-0;
+  }
+
+  .overlay-panel {
+    @apply fixed z-20 glass-card p-6 animate-slide-up;
+  }
+
+  .floating-button {
+    @apply fixed z-30 glass-button p-4 hover:shadow-lg
+           active:scale-95 transition-all duration-200;
+  }
+
+  .sos-button {
+    @apply fixed z-40 p-5 rounded-full bg-red-500 text-white shadow-float
+           hover:bg-red-600 active:bg-red-700
+           animate-pulse cursor-pointer
+           flex items-center justify-center;
+  }
+}
+
+#root {
+  min-height: 100vh;
+  width: 100%;
+}
