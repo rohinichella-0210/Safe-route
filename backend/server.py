@@ -1044,6 +1044,48 @@ async def get_weights():
 
 
 # ---------- Public Transit ----------
+# CMRL Chennai Metro line classification (from CMRL public network map, 2025):
+# Blue Line (Corridor I): Wimco Nagar Depot ↔ Chennai Airport
+# Green Line (Corridor II): Chennai Central ↔ Chennai Airport (via Egmore/Anna Nagar/CMBT)
+# Interchange stations serve both lines.
+CMRL_BLUE_LINE = {
+    "wimco nagar", "wimco nagar depot", "thiruvottiyur", "tiruvottiyur",
+    "tiruvottiyur theradi", "kaladipet", "tollgate", "new washermanpet",
+    "tondiarpet", "sir theagaraya college", "washermanpet", "mannadi",
+    "high court", "chennai central", "central metro", "central",
+    "government estate", "lic", "thousand lights", "ag-dms", "ag dms",
+    "teynampet", "nandanam", "நந்தனம்", "saidapet", "சைதாப்பேட்டை",
+    "little mount", "guindy", "கிண்டி", "alandur", "ஆலந்தூர்",
+    "ota", "ota-nanganallur road", "nanganallur road",
+    "meenambakkam", "airport", "chennai international airport",
+    "சென்னை விமான நிலையம்", "தேனாம்பேட்டை",
+}
+CMRL_GREEN_LINE = {
+    "chennai central", "central metro", "central", "egmore", "எக்மோர்",
+    "nehru park", "kilpauk medical college", "kilpauk", "pachaiyappa's college",
+    "pachaiyappas college", "shenoy nagar", "anna nagar east", "anna nagar",
+    "anna nagar tower", "thirumangalam", "koyambedu", "கோயம்பேடு",
+    "cmbt", "arumbakkam", "vadapalani", "வடபழனி", "ashok nagar",
+    "ekkattuthangal", "alandur", "ஆலந்தூர்",
+    "nanganallur road", "meenambakkam", "airport",
+}
+
+
+def cmrl_lines_for(name: str) -> List[str]:
+    """Return ['blue'], ['green'], or ['blue','green'] for interchange stations."""
+    if not name:
+        return []
+    n = name.lower().strip()
+    # strip common suffixes/prefixes
+    n2 = n.replace(" metro", "").replace(" station", "").strip()
+    lines = []
+    if n in CMRL_BLUE_LINE or n2 in CMRL_BLUE_LINE:
+        lines.append("blue")
+    if n in CMRL_GREEN_LINE or n2 in CMRL_GREEN_LINE:
+        lines.append("green")
+    return lines
+
+
 # CMRL Chennai Metro fare slabs (public rate card, as of 2025):
 def cmrl_fare_inr(distance_km: float) -> int:
     if distance_km <= 2: return 10
@@ -1073,6 +1115,29 @@ def auto_fare_inr(distance_km: float) -> int:
 def cab_fare_inr(distance_km: float) -> int:
     # Aggregator (Ola/Uber Mini) rough estimate for Chennai: ₹95 base + ₹12/km. Surge varies.
     return int(round(95 + distance_km * 12))
+
+
+async def osrm_geometry(profile: str, src_lat: float, src_lng: float, dst_lat: float, dst_lng: float) -> Optional[Dict[str, Any]]:
+    """Query OSRM for a route including geometry."""
+    coords_str = f"{src_lng},{src_lat};{dst_lng},{dst_lat}"
+    url = f"{OSRM_BASE}/route/v1/{profile}/{coords_str}"
+    params = {"overview": "full", "geometries": "geojson", "alternatives": "false"}
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.get(url, params=params)
+            r.raise_for_status()
+            data = r.json()
+            if data.get("code") != "Ok" or not data.get("routes"):
+                return None
+            rt = data["routes"][0]
+            return {
+                "distance_m": rt["distance"],
+                "duration_s": rt["duration"],
+                "geometry": rt["geometry"]["coordinates"],  # [lng, lat] pairs
+            }
+    except Exception as e:
+        logger.warning(f"OSRM {profile} geometry failed: {e}")
+        return None
 
 
 async def osrm_distance(profile: str, src: LatLng, dst: LatLng) -> Optional[Dict[str, Any]]:
@@ -1203,6 +1268,26 @@ async def transit_options(req: RouteRequest):
         total_min = round(metro_min + walk_min_total)
         fare = cmrl_fare_inr(metro_km)
         safety = transit_safety("metro", hour)
+
+        # CMRL line classification
+        src_lines = cmrl_lines_for(src_metro["name"])
+        dst_lines = cmrl_lines_for(dst_metro["name"])
+        # Common line(s) — if any, direct ride; otherwise interchange at Alandur or Central Metro
+        common = list(set(src_lines) & set(dst_lines))
+        if common:
+            line_note = f"{'/'.join(l.title() for l in common)} Line — direct"
+        elif src_lines and dst_lines:
+            line_note = f"{src_lines[0].title()} Line → interchange at Alandur/Central → {dst_lines[0].title()} Line"
+        else:
+            line_note = "CMRL (line unclassified)"
+        src_metro["lines"] = src_lines
+        dst_metro["lines"] = dst_lines
+
+        # Real walking geometries for the walk legs
+        walk1_geo = await osrm_geometry("foot", req.source.lat, req.source.lng, src_metro["lat"], src_metro["lng"])
+        walk2_geo = await osrm_geometry("foot", dst_metro["lat"], dst_metro["lng"], req.destination.lat, req.destination.lng)
+        metro_geo = [[src_metro["lng"], src_metro["lat"]], [dst_metro["lng"], dst_metro["lat"]]]  # straight line for now
+
         options.append({
             "mode": "metro",
             "label": "Metro (CMRL)",
@@ -1212,14 +1297,18 @@ async def transit_options(req: RouteRequest):
             "duration_min": total_min,
             "distance_km": round(metro_km + (walk1_m + walk2_m) / 1000, 1),
             "safety": safety,
+            "line_note": line_note,
             "legs": [
-                {"type": "walk", "from": "Source", "to": src_metro["name"], "distance_m": walk1_m, "duration_min": round(walk1_m / 80)},
-                {"type": "metro", "from": src_metro["name"], "to": dst_metro["name"], "distance_km": round(metro_km, 1), "duration_min": round(metro_min)},
-                {"type": "walk", "from": dst_metro["name"], "to": "Destination", "distance_m": walk2_m, "duration_min": round(walk2_m / 80)},
+                {"type": "walk", "from": "Source", "to": src_metro["name"], "distance_m": walk1_m, "duration_min": round(walk1_m / 80),
+                 "geometry": walk1_geo["geometry"] if walk1_geo else None},
+                {"type": "metro", "from": src_metro["name"], "to": dst_metro["name"], "distance_km": round(metro_km, 1),
+                 "duration_min": round(metro_min), "geometry": metro_geo, "lines": common if common else src_lines},
+                {"type": "walk", "from": dst_metro["name"], "to": "Destination", "distance_m": walk2_m, "duration_min": round(walk2_m / 80),
+                 "geometry": walk2_geo["geometry"] if walk2_geo else None},
             ],
             "source_station": src_metro,
             "destination_station": dst_metro,
-            "data_source": "OpenStreetMap (real CMRL station locations) + CMRL published fare slabs",
+            "data_source": "OpenStreetMap (real CMRL station locations) + CMRL published fare slabs + CMRL network map (Blue/Green Line)",
         })
     else:
         options.append({
@@ -1242,6 +1331,12 @@ async def transit_options(req: RouteRequest):
         fare_ord = mtc_bus_fare_inr(bus_km, deluxe=False)
         fare_dlx = mtc_bus_fare_inr(bus_km, deluxe=True)
         safety = transit_safety("bus", hour)
+
+        # Walking geometries + bus line via driving profile (rough approximation of bus route)
+        walk1_geo = await osrm_geometry("foot", req.source.lat, req.source.lng, src_bus["lat"], src_bus["lng"])
+        walk2_geo = await osrm_geometry("foot", dst_bus["lat"], dst_bus["lng"], req.destination.lat, req.destination.lng)
+        bus_geo = await osrm_geometry("car", src_bus["lat"], src_bus["lng"], dst_bus["lat"], dst_bus["lng"])
+
         options.append({
             "mode": "bus",
             "label": "Bus (MTC)",
@@ -1252,9 +1347,12 @@ async def transit_options(req: RouteRequest):
             "distance_km": round(bus_km, 1),
             "safety": safety,
             "legs": [
-                {"type": "walk", "from": "Source", "to": src_bus["name"], "distance_m": walk1_m, "duration_min": round(walk1_m / 80)},
-                {"type": "bus", "from": src_bus["name"], "to": dst_bus["name"], "distance_km": round(bus_km, 1), "duration_min": round(bus_min)},
-                {"type": "walk", "from": dst_bus["name"], "to": "Destination", "distance_m": walk2_m, "duration_min": round(walk2_m / 80)},
+                {"type": "walk", "from": "Source", "to": src_bus["name"], "distance_m": walk1_m, "duration_min": round(walk1_m / 80),
+                 "geometry": walk1_geo["geometry"] if walk1_geo else None},
+                {"type": "bus", "from": src_bus["name"], "to": dst_bus["name"], "distance_km": round(bus_km, 1),
+                 "duration_min": round(bus_min), "geometry": bus_geo["geometry"] if bus_geo else [[src_bus["lng"], src_bus["lat"]], [dst_bus["lng"], dst_bus["lat"]]]},
+                {"type": "walk", "from": dst_bus["name"], "to": "Destination", "distance_m": walk2_m, "duration_min": round(walk2_m / 80),
+                 "geometry": walk2_geo["geometry"] if walk2_geo else None},
             ],
             "source_stop": src_bus,
             "destination_stop": dst_bus,

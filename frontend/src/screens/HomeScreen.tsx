@@ -97,6 +97,7 @@ export default function HomeScreen() {
   const [transitOpen, setTransitOpen] = useState(false);
   const [transit, setTransit] = useState<TransitOption[]>([]);
   const [transitLoading, setTransitLoading] = useState(false);
+  const [selectedTransit, setSelectedTransit] = useState<TransitOption | null>(null);
 
   // Locate on mount
   const handleUseLocation = (setter: (p: Place) => void) => {
@@ -145,21 +146,43 @@ export default function HomeScreen() {
     const arr: any[] = [];
     if (source) arr.push({ id: 'src', lat: source.lat, lng: source.lng, color: '#0EA5E9', icon: 'A', label: 'Start' });
     if (destination) arr.push({ id: 'dst', lat: destination.lat, lng: destination.lng, color: '#DC2626', icon: 'B', label: 'Destination' });
+    // Transit station markers
+    if (selectedTransit) {
+      const s = selectedTransit.source_station || selectedTransit.source_stop;
+      const d = selectedTransit.destination_station || selectedTransit.destination_stop;
+      if (s) arr.push({ id: 't-src', lat: s.lat, lng: s.lng, color: selectedTransit.mode === 'metro' ? '#2563EB' : '#0EA5E9', icon: selectedTransit.mode === 'metro' ? 'Ⓜ' : '🚌', label: s.name });
+      if (d) arr.push({ id: 't-dst', lat: d.lat, lng: d.lng, color: selectedTransit.mode === 'metro' ? '#2563EB' : '#0EA5E9', icon: selectedTransit.mode === 'metro' ? 'Ⓜ' : '🚌', label: d.name });
+    }
     safePlaces.slice(0, 60).forEach(p => arr.push({
       id: p.id, lat: p.lat, lng: p.lng, color: SAFE_COLOR[p.category] || SAFE_COLOR.other,
       icon: SAFE_ICON[p.category] || SAFE_ICON.other, label: `${p.name} · ${p.category}`,
     }));
     return arr;
-  }, [source, destination, safePlaces]);
+  }, [source, destination, safePlaces, selectedTransit]);
 
-  const routeLines = useMemo(() => routes.map((r, i) => ({
-    id: r.id,
-    coords: r.geometry,
-    color: bandColor(r.safety.score).hex,
-    weight: i === selectedIdx ? 8 : 4,
-    opacity: i === selectedIdx ? 0.95 : 0.5,
-    onClick: () => setSelectedIdx(i),
-  })), [routes, selectedIdx]);
+  const routeLines = useMemo(() => {
+    // If a transit option is selected, render its legs
+    if (selectedTransit && selectedTransit.legs) {
+      return selectedTransit.legs
+        .filter(l => l.geometry && l.geometry.length > 1)
+        .map((l, i) => ({
+          id: `t-${i}`,
+          coords: l.geometry as number[][],
+          color: l.type === 'walk' ? '#64748B' : l.type === 'metro' ? '#2563EB' : '#0EA5E9',
+          weight: l.type === 'walk' ? 5 : 7,
+          opacity: 0.9,
+          dashArray: l.type === 'walk' ? '2 8' : undefined,
+        }));
+    }
+    return routes.map((r, i) => ({
+      id: r.id,
+      coords: r.geometry,
+      color: bandColor(r.safety.score).hex,
+      weight: i === selectedIdx ? 8 : 4,
+      opacity: i === selectedIdx ? 0.95 : 0.5,
+      onClick: () => setSelectedIdx(i),
+    }));
+  }, [routes, selectedIdx, selectedTransit]);
 
   const selected = routes[selectedIdx];
 
@@ -188,7 +211,7 @@ export default function HomeScreen() {
         markers={routeMarkers}
         routes={routeLines}
         userLocation={userLoc}
-        fitBounds={routes.length > 0}
+        fitBounds={routes.length > 0 || !!selectedTransit}
         className="absolute inset-0 w-full h-full z-0"
       />
 
@@ -205,6 +228,22 @@ export default function HomeScreen() {
         className="absolute top-4 right-4 z-40 flex items-center gap-2 bg-white/90 backdrop-blur-xl border border-white/60 rounded-full px-4 py-2 shadow-lg text-sm font-medium text-slate-700 hover:bg-white transition">
         <LayoutDashboard className="w-4 h-4" /> Dashboard
       </button>
+
+      {/* Active transit legend */}
+      {selectedTransit && (
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-40 flex items-center gap-2 bg-white/95 backdrop-blur-xl border border-white/60 rounded-full pl-4 pr-2 py-1.5 shadow-lg" data-testid="transit-legend">
+          <div className={`w-6 h-6 rounded-full flex items-center justify-center ${selectedTransit.mode === 'metro' ? 'bg-blue-100 text-blue-700' : 'bg-sky-100 text-sky-700'}`}>
+            {selectedTransit.mode === 'metro' ? <TramFront className="w-3.5 h-3.5" /> : <Bus className="w-3.5 h-3.5" />}
+          </div>
+          <div className="text-xs">
+            <div className="font-semibold text-slate-900 leading-tight">{selectedTransit.label} · ₹{selectedTransit.fare_inr} · {selectedTransit.duration_min}m</div>
+            {selectedTransit.line_note && <div className="text-[10px] text-slate-500 leading-tight">{selectedTransit.line_note}</div>}
+          </div>
+          <button onClick={() => setSelectedTransit(null)} className="ml-1 w-6 h-6 rounded-full hover:bg-slate-100 flex items-center justify-center" data-testid="clear-transit">
+            <X className="w-3.5 h-3.5 text-slate-500" />
+          </button>
+        </div>
+      )}
 
       {/* Left panel (desktop) / bottom sheet (mobile) */}
       <motion.div
@@ -408,6 +447,7 @@ export default function HomeScreen() {
                     : opt.mode === 'auto' ? 'bg-yellow-100 text-yellow-700'
                     : opt.mode === 'cab' ? 'bg-slate-100 text-slate-700'
                     : 'bg-teal-100 text-teal-700';
+                  const hasMappable = opt.legs?.some(l => l.geometry && l.geometry.length > 1);
                   return (
                     <div key={i} className={`rounded-2xl border p-4 ${opt.unavailable ? 'bg-slate-50 border-slate-200 opacity-70' : 'bg-white border-slate-200 shadow-sm'}`}
                       data-testid={`transit-option-${opt.mode}`}>
@@ -429,6 +469,15 @@ export default function HomeScreen() {
                                 <span className="flex items-center gap-1 text-slate-500"><Clock className="w-3.5 h-3.5" />{opt.duration_min} min</span>
                                 <span className="text-slate-500">{opt.distance_km} km</span>
                               </div>
+                              {opt.line_note && (
+                                <div className="mt-2 flex items-center gap-1.5 flex-wrap">
+                                  {opt.line_note.toLowerCase().includes('blue') && <span className="text-[10px] font-bold uppercase tracking-wider bg-blue-100 text-blue-800 px-2 py-0.5 rounded-full" data-testid={`line-blue-${opt.mode}`}>🔵 Blue Line</span>}
+                                  {opt.line_note.toLowerCase().includes('green') && <span className="text-[10px] font-bold uppercase tracking-wider bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full" data-testid={`line-green-${opt.mode}`}>🟢 Green Line</span>}
+                                  {opt.line_note.toLowerCase().includes('interchange') && <span className="text-[10px] font-bold uppercase tracking-wider bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full">🔀 Interchange</span>}
+                                  {!opt.line_note.toLowerCase().includes('blue') && !opt.line_note.toLowerCase().includes('green') && !opt.line_note.toLowerCase().includes('interchange') && <span className="text-[10px] text-slate-500">{opt.line_note}</span>}
+                                  {opt.line_note.toLowerCase().includes('direct') && <span className="text-[10px] text-slate-500">· direct, no change</span>}
+                                </div>
+                              )}
                               {opt.fare_note && <div className="text-[11px] text-slate-500 mt-1">{opt.fare_note}</div>}
                               {opt.legs && opt.legs.length > 0 && (
                                 <div className="mt-3 flex items-center gap-1 text-[11px] text-slate-600 flex-wrap">
@@ -449,6 +498,13 @@ export default function HomeScreen() {
                                     {opt.safety.factors.map((f, fi) => <li key={fi}>{f}</li>)}
                                   </ul>
                                 </div>
+                              )}
+                              {hasMappable && (
+                                <button data-testid={`show-transit-map-${opt.mode}`}
+                                  onClick={() => { setRoutes([]); setSelectedTransit(opt); setTransitOpen(false); toast('success', `${opt.label} legs shown on map`); }}
+                                  className="mt-3 w-full flex items-center justify-center gap-1.5 bg-teal-600 hover:bg-teal-700 text-white rounded-xl px-3 py-2 text-sm font-medium transition">
+                                  <MapPin className="w-4 h-4" /> Show on map
+                                </button>
                               )}
                               {opt.data_source && (
                                 <div className="text-[10px] text-slate-400 mt-2">Source: {opt.data_source}</div>

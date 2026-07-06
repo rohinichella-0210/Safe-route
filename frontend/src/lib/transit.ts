@@ -1,5 +1,10 @@
 import { api } from './api';
 
+export interface TransitLeg {
+  type: string; from: string; to: string;
+  distance_m?: number; distance_km?: number; duration_min: number;
+  geometry?: number[][] | null; lines?: string[];
+}
 export interface TransitOption {
   mode: string;
   label: string;
@@ -9,9 +14,10 @@ export interface TransitOption {
   duration_min?: number;
   distance_km?: number;
   safety: { score: number; band: string; factors: string[]; confidence: number };
-  legs?: { type: string; from: string; to: string; distance_m?: number; distance_km?: number; duration_min: number }[];
-  source_station?: { name: string; lat: number; lng: number; distance_m: number };
-  destination_station?: { name: string; lat: number; lng: number; distance_m: number };
+  legs?: TransitLeg[];
+  line_note?: string;
+  source_station?: { name: string; lat: number; lng: number; distance_m: number; lines?: string[] };
+  destination_station?: { name: string; lat: number; lng: number; distance_m: number; lines?: string[] };
   source_stop?: { name: string; lat: number; lng: number; distance_m: number };
   destination_stop?: { name: string; lat: number; lng: number; distance_m: number };
   unavailable?: boolean;

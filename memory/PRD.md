@@ -87,7 +87,8 @@ The UI never claims fabricated certainty. Every score displays its confidence pe
 - [ ] Rate-limit `/api/incidents/{id}/confirm` per IP/session to prevent inflation
 - [ ] Photo upload for incident reports (optional, EXIF stripped)
 - [ ] Native share sheet (`navigator.share`) fallback for mobile in addition to WhatsApp
-- [ ] Show transit legs on the map (walk-line to metro station → metro-line to dest station → walk-line)
+- [x] ~~Show transit legs on the map~~ (walk-line to metro station → metro-line to dest station → walk-line) — **DONE 2026-07-06**
+- [x] ~~Per-line badges (Blue Line / Green Line / Interchange)~~ — **DONE 2026-07-06**
 
 ### P2 (future enhancements)
 - [ ] Split `server.py` into modules (`routes.py`, `journeys.py`, `incidents.py`, `safety_scoring.py`, `seed.py`)

@@ -6,7 +6,7 @@ interface MarkerSpec {
   label?: string; onClick?: () => void;
 }
 interface RouteSpec {
-  id: string | number; coords: number[][]; color: string; weight?: number; opacity?: number; onClick?: () => void;
+  id: string | number; coords: number[][]; color: string; weight?: number; opacity?: number; dashArray?: string; onClick?: () => void;
 }
 
 interface Props {
@@ -85,6 +85,7 @@ export default function MapView({ center, zoom = 13, markers = [], routes = [], 
         opacity: r.opacity ?? 0.85,
         lineCap: 'round',
         lineJoin: 'round',
+        dashArray: r.dashArray,
       }).addTo(layer);
       if (r.onClick) pl.on('click', () => r.onClick && r.onClick());
     });
