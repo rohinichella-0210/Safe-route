@@ -43,7 +43,17 @@ export default function ReportScreen() {
     }, () => toast('error', 'GPS permission denied'), { enableHighAccuracy: true });
   };
 
-  useEffect(() => { getGPS(); }, []); // eslint-disable-line
+  useEffect(() => {
+    // Try GPS first
+    getGPS();
+    // Fallback: load nearby reports from Chennai center so list is never empty
+    (async () => {
+      try {
+        const r = await fetchIncidents(13.0827, 80.2707, 15000);
+        setNearby(prev => prev.length > 0 ? prev : r.incidents);
+      } catch {}
+    })();
+  }, []); // eslint-disable-line
 
   const submit = async () => {
     if (!incidentLoc) { toast('warning', 'Set incident location'); return; }
