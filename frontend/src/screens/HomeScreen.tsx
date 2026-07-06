@@ -1,0 +1,363 @@
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { motion, AnimatePresence } from 'framer-motion';
+import { Search, MapPin, Navigation2, ShieldAlert, Info, X, ChevronDown, Loader2, LocateFixed, Users, Building2, ArrowRight, LayoutDashboard } from 'lucide-react';
+import MapView from '../components/MapView';
+import ScoreBadge, { bandColor, bandLabel } from '../components/ScoreBadge';
+import { toast } from '../components/Toaster';
+import { searchPlaces, computeRoutes, startJourney, fetchSafePlaces, type Place, type RouteResult, type SafePlace } from '../lib/api';
+
+const CHENNAI: [number, number] = [13.0827, 80.2707];
+
+const SAFE_ICON: Record<string, string> = {
+  police: '🛡️', women_police: '👮‍♀️', hospital: '🏥', pharmacy: '💊',
+  metro: 'Ⓜ️', bus: '🚌', railway: '🚉', petrol: '⛽', govt: '🏛️', other: '📍',
+};
+const SAFE_COLOR: Record<string, string> = {
+  police: '#0F766E', women_police: '#7C3AED', hospital: '#DC2626', pharmacy: '#EA580C',
+  metro: '#2563EB', bus: '#0EA5E9', railway: '#6366F1', petrol: '#65A30D', govt: '#475569', other: '#64748B',
+};
+
+interface SearchBoxProps {
+  label: string; value: Place | null; onSelect: (p: Place) => void; testId: string; placeholder: string;
+  onUseLocation?: () => void;
+}
+function SearchBox({ label, value, onSelect, testId, placeholder, onUseLocation }: SearchBoxProps) {
+  const [q, setQ] = useState('');
+  const [results, setResults] = useState<Place[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [open, setOpen] = useState(false);
+  const t = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    if (!q || q.length < 2) { setResults([]); return; }
+    if (t.current) clearTimeout(t.current);
+    t.current = setTimeout(async () => {
+      setLoading(true);
+      try { const r = await searchPlaces(q); setResults(r); setOpen(true); }
+      catch { toast('error', 'Search failed'); }
+      setLoading(false);
+    }, 350);
+  }, [q]);
+
+  return (
+    <div className="relative">
+      <label className="block text-[11px] uppercase tracking-widest text-slate-500 mb-1 font-semibold">{label}</label>
+      <div className="flex items-center gap-2 bg-slate-50 border border-transparent focus-within:bg-white focus-within:border-teal-500 focus-within:ring-2 focus-within:ring-teal-200 rounded-xl px-3 py-2 transition-all">
+        <MapPin className="w-4 h-4 text-slate-400 shrink-0" />
+        <input
+          data-testid={testId}
+          value={value ? value.label.split(',').slice(0, 2).join(', ') : q}
+          onChange={(e) => { setQ(e.target.value); if (value) onSelect(null as any); }}
+          onFocus={() => q.length >= 2 && setOpen(true)}
+          onBlur={() => setTimeout(() => setOpen(false), 200)}
+          placeholder={placeholder}
+          className="flex-1 bg-transparent outline-none text-sm text-slate-800 placeholder:text-slate-400"
+        />
+        {loading && <Loader2 className="w-4 h-4 animate-spin text-slate-400" />}
+        {onUseLocation && (
+          <button data-testid={`${testId}-locate`} onClick={onUseLocation}
+            className="text-teal-600 hover:text-teal-700 p-1" aria-label="Use current location">
+            <LocateFixed className="w-4 h-4" />
+          </button>
+        )}
+      </div>
+      <AnimatePresence>
+        {open && results.length > 0 && (
+          <motion.div initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
+            className="absolute z-40 top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-lg max-h-64 overflow-y-auto panel-scroll">
+            {results.map((r, i) => (
+              <button key={i} onMouseDown={() => { onSelect(r); setOpen(false); setQ(''); }}
+                data-testid={`${testId}-result-${i}`}
+                className="w-full text-left px-3 py-2.5 hover:bg-slate-50 text-sm border-b border-slate-100 last:border-0">
+                <div className="font-medium text-slate-800 truncate">{r.label.split(',').slice(0, 2).join(', ')}</div>
+                <div className="text-xs text-slate-500 truncate">{r.label}</div>
+              </button>
+            ))}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+export default function HomeScreen() {
+  const nav = useNavigate();
+  const [source, setSource] = useState<Place | null>(null);
+  const [destination, setDestination] = useState<Place | null>(null);
+  const [routes, setRoutes] = useState<RouteResult[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [selectedIdx, setSelectedIdx] = useState(0);
+  const [mode, setMode] = useState<'walking' | 'cycling' | 'driving'>('walking');
+  const [showBreakdown, setShowBreakdown] = useState(false);
+  const [safePlaces, setSafePlaces] = useState<SafePlace[]>([]);
+  const [userLoc, setUserLoc] = useState<{ lat: number; lng: number } | null>(null);
+  const [panelOpen, setPanelOpen] = useState(true);
+
+  // Locate on mount
+  const handleUseLocation = (setter: (p: Place) => void) => {
+    if (!navigator.geolocation) { toast('error', 'Geolocation not supported'); return; }
+    navigator.geolocation.getCurrentPosition(async (pos) => {
+      const lat = pos.coords.latitude, lng = pos.coords.longitude;
+      setUserLoc({ lat, lng });
+      setter({ label: `Current location (${lat.toFixed(4)}, ${lng.toFixed(4)})`, lat, lng });
+      toast('success', 'Location detected');
+    }, () => toast('error', 'Location permission denied'), { enableHighAccuracy: true, timeout: 10000 });
+  };
+
+  const findRoutes = async () => {
+    if (!source || !destination) { toast('warning', 'Pick source and destination'); return; }
+    setLoading(true); setRoutes([]);
+    try {
+      const r = await computeRoutes({ lat: source.lat, lng: source.lng }, { lat: destination.lat, lng: destination.lng }, mode);
+      if (!r.routes.length) { toast('warning', 'No route found'); }
+      else {
+        setRoutes(r.routes); setSelectedIdx(0);
+        // Fetch safe places along the destination area
+        const sp = await fetchSafePlaces(destination.lat, destination.lng, 1500);
+        setSafePlaces(sp.places);
+        toast('success', `${r.routes.length} route(s) analyzed`);
+      }
+    } catch (e: any) {
+      toast('error', e?.response?.data?.detail || 'Failed to compute routes');
+    }
+    setLoading(false);
+  };
+
+  const routeMarkers = useMemo(() => {
+    const arr: any[] = [];
+    if (source) arr.push({ id: 'src', lat: source.lat, lng: source.lng, color: '#0EA5E9', icon: 'A', label: 'Start' });
+    if (destination) arr.push({ id: 'dst', lat: destination.lat, lng: destination.lng, color: '#DC2626', icon: 'B', label: 'Destination' });
+    safePlaces.slice(0, 60).forEach(p => arr.push({
+      id: p.id, lat: p.lat, lng: p.lng, color: SAFE_COLOR[p.category] || SAFE_COLOR.other,
+      icon: SAFE_ICON[p.category] || SAFE_ICON.other, label: `${p.name} · ${p.category}`,
+    }));
+    return arr;
+  }, [source, destination, safePlaces]);
+
+  const routeLines = useMemo(() => routes.map((r, i) => ({
+    id: r.id,
+    coords: r.geometry,
+    color: bandColor(r.safety.score).hex,
+    weight: i === selectedIdx ? 8 : 4,
+    opacity: i === selectedIdx ? 0.95 : 0.5,
+    onClick: () => setSelectedIdx(i),
+  })), [routes, selectedIdx]);
+
+  const selected = routes[selectedIdx];
+
+  const beginJourney = async () => {
+    if (!selected || !destination) return;
+    try {
+      const j = await startJourney({
+        route_geometry: selected.geometry,
+        destination: { lat: destination.lat, lng: destination.lng },
+        destination_label: destination.label.split(',').slice(0, 2).join(', '),
+        estimated_duration_sec: selected.duration_s,
+        estimated_distance_m: selected.distance_m,
+        safety_score: selected.safety.score,
+      });
+      nav(`/journey/${j.share_token}`);
+    } catch (e: any) {
+      toast('error', 'Could not start journey');
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 w-full h-full bg-slate-50">
+      <MapView
+        center={CHENNAI}
+        zoom={12}
+        markers={routeMarkers}
+        routes={routeLines}
+        userLocation={userLoc}
+        fitBounds={routes.length > 0}
+        className="absolute inset-0 w-full h-full z-0"
+      />
+
+      {/* Top brand pill */}
+      <div className="absolute top-4 left-4 z-40 flex items-center gap-2 bg-white/90 backdrop-blur-xl border border-white/60 rounded-full px-4 py-2 shadow-lg" data-testid="brand-pill">
+        <div className="w-7 h-7 bg-teal-600 rounded-full flex items-center justify-center text-white font-bold text-sm">S</div>
+        <div>
+          <div className="font-poppins font-bold text-slate-900 text-sm leading-none">SafeRoute</div>
+          <div className="text-[10px] text-slate-500 uppercase tracking-widest">Chennai</div>
+        </div>
+      </div>
+
+      <button data-testid="dashboard-link" onClick={() => nav('/dashboard')}
+        className="absolute top-4 right-4 z-40 flex items-center gap-2 bg-white/90 backdrop-blur-xl border border-white/60 rounded-full px-4 py-2 shadow-lg text-sm font-medium text-slate-700 hover:bg-white transition">
+        <LayoutDashboard className="w-4 h-4" /> Dashboard
+      </button>
+
+      {/* Left panel (desktop) / bottom sheet (mobile) */}
+      <motion.div
+        initial={false}
+        animate={{ y: panelOpen ? 0 : 400 }}
+        transition={{ type: 'spring', damping: 26, stiffness: 240 }}
+        className="absolute z-40 bottom-0 left-0 right-0 md:top-20 md:bottom-8 md:left-4 md:right-auto md:w-[420px] bg-white/90 backdrop-blur-xl border border-white/60 shadow-glass rounded-t-3xl md:rounded-2xl overflow-hidden flex flex-col max-h-[85vh]"
+      >
+        <div className="p-4 md:p-5 border-b border-slate-100 shrink-0">
+          <button className="md:hidden w-12 h-1.5 bg-slate-300 rounded-full mx-auto mb-3 block" onClick={() => setPanelOpen(!panelOpen)} aria-label="Toggle panel" />
+          <div className="flex items-center gap-2 mb-3">
+            <h1 className="font-poppins font-bold text-lg text-slate-900">Plan a safer route</h1>
+          </div>
+          <div className="space-y-2">
+            <SearchBox label="From" testId="search-source" placeholder="Search Chennai or use GPS"
+              value={source} onSelect={setSource} onUseLocation={() => handleUseLocation(setSource)} />
+            <SearchBox label="To" testId="search-destination" placeholder="Where are you going?"
+              value={destination} onSelect={setDestination} />
+          </div>
+          <div className="flex items-center justify-between mt-3">
+            <div className="flex gap-1 bg-slate-100 rounded-full p-1">
+              {(['walking', 'cycling', 'driving'] as const).map(m => (
+                <button key={m} onClick={() => setMode(m)} data-testid={`mode-${m}`}
+                  className={`px-3 py-1 text-xs rounded-full font-medium transition ${mode === m ? 'bg-white text-teal-700 shadow-sm' : 'text-slate-500'}`}>
+                  {m}
+                </button>
+              ))}
+            </div>
+            <button data-testid="find-routes-btn" onClick={findRoutes} disabled={loading || !source || !destination}
+              className="bg-teal-600 hover:bg-teal-700 disabled:bg-slate-300 text-white rounded-xl px-4 py-2 font-medium text-sm flex items-center gap-2 transition">
+              {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+              Analyze
+            </button>
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto panel-scroll p-4 md:p-5 space-y-3" data-testid="routes-panel">
+          {routes.length === 0 && !loading && (
+            <div className="text-center py-10 px-3">
+              <div className="w-14 h-14 mx-auto rounded-2xl bg-teal-50 flex items-center justify-center mb-3">
+                <Navigation2 className="w-7 h-7 text-teal-600" />
+              </div>
+              <h3 className="font-poppins font-semibold text-slate-800">Safety-first navigation</h3>
+              <p className="text-sm text-slate-500 mt-2 leading-relaxed">
+                Every route is scored 0–100 using real Chennai data — police stations, hospitals, community reports,
+                lighting, and time of day. Every score explains its factors.
+              </p>
+              <div className="mt-4 flex flex-col gap-2 text-xs text-slate-600">
+                <div className="flex items-center gap-2 justify-center"><Users className="w-3.5 h-3.5 text-teal-600" /> 100% anonymous — no accounts</div>
+                <div className="flex items-center gap-2 justify-center"><Building2 className="w-3.5 h-3.5 text-teal-600" /> Real OpenStreetMap data for Chennai</div>
+              </div>
+            </div>
+          )}
+
+          {routes.map((r, i) => (
+            <motion.div key={r.id} onClick={() => setSelectedIdx(i)}
+              initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.04 }}
+              data-testid={`route-card-${i}`}
+              className={`cursor-pointer rounded-2xl p-4 border transition-all ${
+                i === selectedIdx ? 'bg-white border-teal-500 shadow-md ring-2 ring-teal-100' : 'bg-white/80 border-slate-200 hover:border-slate-300'
+              }`}>
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className={`text-[10px] uppercase tracking-widest font-bold px-2 py-0.5 rounded-full ${bandColor(r.safety.score).bg} ${bandColor(r.safety.score).text}`}>
+                      {r.label}
+                    </span>
+                    <span className="text-[10px] uppercase tracking-widest text-slate-400 font-semibold">
+                      {bandLabel(r.safety.score)} safety
+                    </span>
+                  </div>
+                  <div className="flex items-baseline gap-3 mt-1">
+                    <div className="font-poppins text-lg font-bold text-slate-900">
+                      {Math.round(r.duration_s / 60)} min
+                    </div>
+                    <div className="text-slate-500 text-sm">{(r.distance_m / 1000).toFixed(1)} km</div>
+                  </div>
+                  <div className="flex items-center gap-3 mt-2 text-xs text-slate-600">
+                    <span title="Verified incidents near route">🛡 {r.safety.verified_incidents_near_route} verified</span>
+                    <span title="Safe places along route">📍 {r.safety.safe_places_near_route} landmarks</span>
+                    <span title="Data confidence">{Math.round(r.safety.confidence * 100)}% confident</span>
+                  </div>
+                </div>
+                <ScoreBadge score={r.safety.score} size="md" />
+              </div>
+              {i === selectedIdx && (
+                <div className="mt-3 pt-3 border-t border-slate-100 flex gap-2">
+                  <button onClick={(e) => { e.stopPropagation(); setShowBreakdown(true); }}
+                    data-testid={`route-why-${i}`}
+                    className="flex-1 flex items-center justify-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl px-3 py-2 text-sm font-medium transition">
+                    <Info className="w-4 h-4" /> Why this score
+                  </button>
+                  <button onClick={(e) => { e.stopPropagation(); beginJourney(); }}
+                    data-testid={`start-journey-${i}`}
+                    className="flex-1 flex items-center justify-center gap-1.5 bg-teal-600 hover:bg-teal-700 text-white rounded-xl px-3 py-2 text-sm font-medium transition">
+                    Start <ArrowRight className="w-4 h-4" />
+                  </button>
+                </div>
+              )}
+            </motion.div>
+          ))}
+
+          {routes.length > 0 && (
+            <button onClick={() => nav('/report')} data-testid="report-incident-btn"
+              className="w-full mt-2 flex items-center justify-center gap-2 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-xl px-3 py-2.5 text-sm font-medium transition">
+              <ShieldAlert className="w-4 h-4" /> Report a safety concern
+            </button>
+          )}
+        </div>
+      </motion.div>
+
+      {/* Breakdown modal */}
+      <AnimatePresence>
+        {showBreakdown && selected && (
+          <motion.div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-end md:items-center justify-center"
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            onClick={() => setShowBreakdown(false)}>
+            <motion.div onClick={(e) => e.stopPropagation()}
+              initial={{ y: 40, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 40, opacity: 0 }}
+              className="bg-white w-full md:max-w-lg rounded-t-3xl md:rounded-3xl shadow-2xl max-h-[85vh] overflow-hidden flex flex-col"
+              data-testid="breakdown-modal">
+              <div className="p-5 border-b border-slate-100 flex items-start gap-4">
+                <ScoreBadge score={selected.safety.score} size="lg" confidence={selected.safety.confidence} />
+                <div className="flex-1">
+                  <div className="font-poppins font-bold text-lg text-slate-900">Why {selected.safety.score}?</div>
+                  <div className="text-sm text-slate-600 mt-1">{bandLabel(selected.safety.score)} safety · {Math.round(selected.safety.confidence * 100)}% confidence in data</div>
+                  {selected.safety.confidence < 0.5 && (
+                    <div className="mt-2 text-xs bg-amber-50 border border-amber-200 text-amber-800 rounded-lg px-2 py-1.5">
+                      ⚠ Limited data for this area — use your own judgment.
+                    </div>
+                  )}
+                </div>
+                <button onClick={() => setShowBreakdown(false)} className="p-1 hover:bg-slate-100 rounded-full" data-testid="close-breakdown">
+                  <X className="w-5 h-5 text-slate-500" />
+                </button>
+              </div>
+              <div className="flex-1 overflow-y-auto panel-scroll p-5 space-y-3">
+                {selected.safety.breakdown.map((f, i) => (
+                  <div key={i} className="bg-white border border-slate-200 rounded-xl p-3.5">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="font-semibold text-slate-900 text-sm">{f.factor}</span>
+                          <span className="text-[10px] text-slate-400 uppercase tracking-widest">weight {f.weight}%</span>
+                        </div>
+                      </div>
+                      <div className={`px-2 py-0.5 rounded-full text-xs font-bold ${bandColor(f.score).bg} ${bandColor(f.score).text}`}>
+                        {f.score}
+                      </div>
+                    </div>
+                    <div className="mt-2 text-xs text-slate-600 leading-relaxed">{f.detail}</div>
+                    <div className="mt-2 flex items-center justify-between text-[11px]">
+                      <span className="text-slate-400">Source: {f.source}</span>
+                      <span className="text-slate-500 font-medium">{Math.round(f.confidence * 100)}% conf.</span>
+                    </div>
+                    <div className="mt-2 h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                      <div className="h-full" style={{ width: `${f.score}%`, background: bandColor(f.score).hex }} />
+                    </div>
+                  </div>
+                ))}
+                <div className="text-xs text-slate-500 bg-slate-50 rounded-xl p-3 border border-slate-200">
+                  <b>How this works:</b> SafeRoute never fabricates data. Where confidence is low (e.g. lighting),
+                  we say so explicitly. All safety scores use real Chennai POI data (OpenStreetMap) and community
+                  reports validated by GPS proximity. You always choose your own route.
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
